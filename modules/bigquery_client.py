@@ -17,7 +17,7 @@ except ImportError:
     HAS_BQ = False
 
 try:
-    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google_auth_oauthlib.flow import InstalledAppFlow, Flow
     from google.oauth2.credentials import Credentials as OAuthCredentials
     from google.auth.transport.requests import Request as AuthRequest
     HAS_OAUTH = True
@@ -488,3 +488,110 @@ def fetch_hub_locations(client, year, month):
         return None, f"BigQuery API Error: {e}"
     except Exception as e:
         return None, f"Error: {e}"
+
+
+# ════════════════════════════════════════════════════
+# WEB OAUTH — Redirect-based flow for Streamlit Cloud
+# ════════════════════════════════════════════════════
+
+def _get_web_oauth_config():
+    """Get web OAuth client config from Streamlit secrets or environment."""
+    client_id, client_secret = None, None
+    try:
+        client_id = st.secrets.get("GOOGLE_CLIENT_ID")
+        client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET")
+    except Exception:
+        pass
+    if not client_id:
+        client_id = os.environ.get("GOOGLE_CLIENT_ID")
+    if not client_secret:
+        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+    if client_id and client_secret:
+        return {"client_id": client_id, "client_secret": client_secret}
+    return None
+
+
+def _get_redirect_uri():
+    """Get OAuth redirect URI from secrets/env. Defaults to localhost for local dev."""
+    uri = None
+    try:
+        uri = st.secrets.get("REDIRECT_URI")
+    except Exception:
+        pass
+    if not uri:
+        uri = os.environ.get("REDIRECT_URI", "http://localhost:8501")
+    return uri.rstrip("/")
+
+
+def _build_web_client_config(config):
+    """Build Google OAuth web client config dict."""
+    return {
+        "web": {
+            "client_id": config["client_id"],
+            "client_secret": config["client_secret"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+    }
+
+
+def get_google_auth_url():
+    """
+    Generate Google OAuth authorization URL for web-based sign-in.
+    Returns (auth_url, state) or (None, error_msg).
+    """
+    if not HAS_OAUTH:
+        return None, "google-auth-oauthlib not installed"
+
+    config = _get_web_oauth_config()
+    if not config:
+        return None, "not_configured"
+
+    redirect_uri = _get_redirect_uri()
+    client_config = _build_web_client_config(config)
+
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=OAUTH_SCOPES,
+        redirect_uri=redirect_uri,
+    )
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    return auth_url, state
+
+
+def handle_oauth_callback(code):
+    """
+    Exchange OAuth authorization code for credentials and create BQ client.
+    Returns (client, error_msg).
+    """
+    if not HAS_BQ:
+        return None, "google-cloud-bigquery not installed"
+    if not HAS_OAUTH:
+        return None, "google-auth-oauthlib not installed"
+
+    config = _get_web_oauth_config()
+    if not config:
+        return None, "OAuth client not configured in secrets"
+
+    redirect_uri = _get_redirect_uri()
+    client_config = _build_web_client_config(config)
+
+    try:
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=OAUTH_SCOPES,
+            redirect_uri=redirect_uri,
+        )
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+
+        client = bigquery.Client(project=PROJECT_ID, credentials=creds)
+        # Verify the connection works
+        list(client.list_datasets(max_results=1))
+        return client, None
+    except Exception as e:
+        return None, str(e)

@@ -224,6 +224,20 @@ def add_log(msg, level="info"):
 from modules.bigquery_client import init_bq_on_startup
 init_bq_on_startup()
 
+# ── Handle Google OAuth callback (redirect from Google sign-in) ──
+_oauth_code = st.query_params.get("code")
+if _oauth_code and st.session_state.get("bq_client") is None:
+    from modules.bigquery_client import handle_oauth_callback
+    _client, _err = handle_oauth_callback(_oauth_code)
+    if _client:
+        st.session_state["bq_client"] = _client
+        st.session_state["bq_auth_mode"] = "google_oauth"
+        st.query_params.clear()
+        st.rerun()
+    else:
+        st.query_params.clear()
+        st.session_state["_oauth_error"] = _err
+
 if loaded:
     for f in loaded:
         add_log(f"Auto-loaded: {f}", "success")
@@ -362,16 +376,30 @@ if bq_mode in ("adc", "google_oauth", "service_account"):
 else:
     st.sidebar.markdown('<div class="sfx-badge sfx-badge--warn"><span class="dot"></span>BigQuery: Connect Below</div>', unsafe_allow_html=True)
     st.sidebar.markdown('<div class="sfx-label">GOOGLE ACCOUNT</div>', unsafe_allow_html=True)
-    if st.sidebar.button("Login with Google", key="google_oauth_btn", type="primary"):
-        from modules.bigquery_client import handle_google_oauth_login
-        with st.sidebar.spinner("Opening Google login..."):
-            ok, err = handle_google_oauth_login()
-        if ok:
-            add_log("BigQuery connected via Google OAuth", "success")
-            st.rerun()
-        else:
-            st.sidebar.error(f"{err}")
-    st.sidebar.caption("Opens browser for sign-in. No JSON key needed.")
+
+    # Show OAuth error from callback if any
+    _oauth_err = st.session_state.pop("_oauth_error", None)
+    if _oauth_err:
+        st.sidebar.error(f"Google sign-in failed: {_oauth_err}")
+
+    # Web OAuth flow (for Streamlit Cloud)
+    from modules.bigquery_client import get_google_auth_url
+    _auth_url, _auth_state = get_google_auth_url()
+    if _auth_url:
+        st.sidebar.link_button("🔐 Sign in with Google", _auth_url, type="primary", use_container_width=True)
+        st.sidebar.caption("Redirects to Google for sign-in. No JSON key needed.")
+    else:
+        # Fallback: local OAuth (desktop — run_local_server)
+        if st.sidebar.button("Login with Google", key="google_oauth_btn", type="primary"):
+            from modules.bigquery_client import handle_google_oauth_login
+            with st.sidebar.spinner("Opening Google login..."):
+                ok, err = handle_google_oauth_login()
+            if ok:
+                add_log("BigQuery connected via Google OAuth", "success")
+                st.rerun()
+            else:
+                st.sidebar.error(f"{err}")
+        st.sidebar.caption("Opens browser for sign-in. No JSON key needed.")
     st.sidebar.markdown('<div class="sfx-label">SERVICE ACCOUNT</div>', unsafe_allow_html=True)
     sa_file = st.sidebar.file_uploader("Upload JSON key", type=["json"], key="sidebar_sa_upload")
     if sa_file:
