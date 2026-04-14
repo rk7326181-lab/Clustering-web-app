@@ -104,19 +104,68 @@ def clear_oauth_credentials():
 
 
 # ════════════════════════════════════════════════════
-# AUTH — ADC → Cached OAuth → Service Account → Manual Login
+# AUTH — Streamlit Secrets → ADC → Cached OAuth → Manual
 # ════════════════════════════════════════════════════
+
+def _connect_from_streamlit_secrets():
+    """
+    Try to connect using credentials stored in Streamlit secrets.
+    Supports both service_account and authorized_user credential types.
+    Returns (client, auth_mode) or (None, None).
+    """
+    try:
+        creds_dict = dict(st.secrets.get("gcp_credentials", {}))
+        if not creds_dict or "type" not in creds_dict:
+            return None, None
+    except Exception:
+        return None, None
+
+    cred_type = creds_dict.get("type")
+
+    try:
+        if cred_type == "service_account":
+            from google.oauth2 import service_account as sa_module
+            creds = sa_module.Credentials.from_service_account_info(
+                creds_dict, scopes=OAUTH_SCOPES
+            )
+            client = bigquery.Client(project=PROJECT_ID, credentials=creds)
+            list(client.list_datasets(max_results=1))
+            return client, "service_account"
+
+        elif cred_type == "authorized_user":
+            creds = OAuthCredentials(
+                token=None,
+                refresh_token=creds_dict.get("refresh_token"),
+                token_uri=creds_dict.get("token_uri", "https://oauth2.googleapis.com/token"),
+                client_id=creds_dict.get("client_id"),
+                client_secret=creds_dict.get("client_secret"),
+            )
+            creds.refresh(AuthRequest())
+            client = bigquery.Client(project=PROJECT_ID, credentials=creds)
+            list(client.list_datasets(max_results=1))
+            return client, "google_oauth"
+
+    except Exception:
+        pass
+
+    return None, None
+
 
 def auto_connect():
     """
-    Try ADC first, then cached OAuth credentials.
+    Try Streamlit secrets first, then ADC, then cached OAuth.
     Returns (client, auth_mode, error_msg).
-    auth_mode: "adc" | "google_oauth" | "needs_key" | None
+    auth_mode: "adc" | "google_oauth" | "service_account" | "needs_key" | None
     """
     if not HAS_BQ:
         return None, None, "google-cloud-bigquery not installed. Run: pip install google-cloud-bigquery"
 
-    # Option A — Application Default Credentials (gcloud auth)
+    # Option 0 — Streamlit secrets (primary method for Streamlit Cloud)
+    client, mode = _connect_from_streamlit_secrets()
+    if client:
+        return client, mode, None
+
+    # Option A — Application Default Credentials (gcloud auth — local dev)
     try:
         client = bigquery.Client(project=PROJECT_ID)
         list(client.list_datasets(max_results=1))

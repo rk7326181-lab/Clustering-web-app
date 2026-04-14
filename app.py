@@ -18,6 +18,66 @@ except ImportError:
 st.set_page_config(page_title="Geo Intelligence Portal — Shadowfax", page_icon="🗺️", layout="wide", initial_sidebar_state="expanded")
 
 # ═══════════════════════════════════════════════════════
+# ACCESS CONTROL — Only allowed users can use the app
+# ═══════════════════════════════════════════════════════
+def _check_access():
+    """Gate the app behind email + password authentication."""
+    if st.session_state.get("authenticated"):
+        return True
+
+    # Read allowed users from secrets
+    try:
+        allowed_emails = list(st.secrets.get("allowed_emails", []))
+        app_password = st.secrets.get("app_password", "")
+    except Exception:
+        allowed_emails = []
+        app_password = os.environ.get("APP_PASSWORD", "")
+
+    # If no access control is configured, allow everyone (local dev)
+    if not allowed_emails and not app_password:
+        st.session_state["authenticated"] = True
+        return True
+
+    st.markdown("""
+    <style>
+    .login-box{max-width:420px;margin:80px auto;padding:40px;border-radius:16px;
+    background:linear-gradient(135deg,#0B2B26 0%,#143D36 100%);
+    box-shadow:0 20px 60px rgba(0,0,0,0.3);text-align:center}
+    .login-box h2{color:#4AEDC4;font-size:1.6rem;margin-bottom:4px}
+    .login-box p{color:#8FBCB0;font-size:0.9rem}
+    </style>
+    <div class="login-box">
+        <h2>🗺️ Geo Intelligence Portal</h2>
+        <p>Authorized access only</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.form("login_form"):
+        email = st.text_input("Email", placeholder="your.name@company.com")
+        password = st.text_input("Password", type="password", placeholder="Enter app password")
+        submitted = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+
+    if submitted:
+        email_ok = (not allowed_emails) or (email.strip().lower() in [e.lower() for e in allowed_emails])
+        pass_ok = (not app_password) or (password == app_password)
+
+        if email_ok and pass_ok:
+            st.session_state["authenticated"] = True
+            st.session_state["user_email"] = email.strip()
+            st.rerun()
+        else:
+            if not email_ok:
+                st.error("This email is not authorized. Contact your admin.")
+            elif not pass_ok:
+                st.error("Incorrect password.")
+
+    return False
+
+
+if not _check_access():
+    st.stop()
+
+# ═══════════════════════════════════════════════════════
 # CSS — Matching React Geo Intelligence Portal Design
 # ═══════════════════════════════════════════════════════
 st.markdown('<link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700;800&amp;family=IBM+Plex+Sans:wght@300;400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">', unsafe_allow_html=True)
@@ -364,7 +424,7 @@ st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 # BigQuery Connection Status
 bq_mode = st.session_state.get("bq_auth_mode")
 if bq_mode in ("adc", "google_oauth", "service_account"):
-    mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account"}.get(bq_mode, bq_mode)
+    mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account", "streamlit_secrets": "Cloud Secrets"}.get(bq_mode, bq_mode)
     st.sidebar.markdown(f'<div class="sfx-badge sfx-badge--ok"><span class="dot"></span>BigQuery Connected ({mode_label})</div>', unsafe_allow_html=True)
     if bq_mode == "google_oauth":
         if st.sidebar.button("Logout Google", key="bq_logout"):
@@ -1210,7 +1270,7 @@ elif nav.startswith("4"):
         cdf = st.session_state.get("cluster_df")
 
         if bq_client:
-            mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account"}.get(bq_mode, bq_mode)
+            mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account", "streamlit_secrets": "Cloud Secrets"}.get(bq_mode, bq_mode)
             st.markdown(f'<div class="sfx-ok">BigQuery Connected ({mode_label})</div>', unsafe_allow_html=True)
         else:
             st.markdown('<div class="sfx-err">BigQuery not connected. Use <b>Login with Google</b> in the sidebar, or upload a Service Account JSON key.</div>', unsafe_allow_html=True)
@@ -1437,7 +1497,7 @@ elif nav.startswith("5"):
         st.markdown('<div class="sfx-err">BigQuery not connected. Set up connection via sidebar.</div>', unsafe_allow_html=True)
         st.stop()
 
-    bq_mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account"}.get(
+    bq_mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account", "streamlit_secrets": "Cloud Secrets"}.get(
         st.session_state.get("bq_auth_mode", "?"), "?")
     st.markdown(f'<div class="sfx-ok">BigQuery Connected ({bq_mode_label})</div>', unsafe_allow_html=True)
 
