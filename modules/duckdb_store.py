@@ -1,13 +1,26 @@
 """
-DuckDB Local Storage — Fast persistence for app DataFrames.
+DuckDB Local Storage - Fast persistence for app DataFrames.
 Replaces slow CSV reads with sub-second DuckDB queries.
 """
 import os
+import tempfile
 import duckdb
 import pandas as pd
 import streamlit as st
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs", "app_store.duckdb")
+
+def _is_streamlit_cloud():
+    """Detect if running on Streamlit Cloud (read-only filesystem)."""
+    return os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true"
+
+
+def _get_db_path():
+    if _is_streamlit_cloud():
+        return os.path.join(tempfile.gettempdir(), "app_store.duckdb")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs", "app_store.duckdb")
+
+
+DB_PATH = _get_db_path()
 
 # Tables that map to session state keys
 TABLE_MAP = {
@@ -22,7 +35,10 @@ TABLE_MAP = {
 
 
 def _ensure_dir():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    except OSError:
+        pass  # Read-only filesystem on Cloud - /tmp/ already exists
 
 
 @st.cache_resource

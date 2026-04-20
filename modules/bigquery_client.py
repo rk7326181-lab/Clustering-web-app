@@ -28,7 +28,13 @@ except ImportError:
 PROJECT_ID = "bi-team-400508"
 
 # Daily cache file for live clusters (avoids redundant BigQuery calls)
-LIVE_CLUSTERS_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs", "live_clusters_cache.json")
+import tempfile as _tempfile
+def _get_cache_dir():
+    if os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true":
+        return _tempfile.gettempdir()
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs")
+
+LIVE_CLUSTERS_CACHE_FILE = os.path.join(_get_cache_dir(), "live_clusters_cache.json")
 
 # Google OAuth scopes for BigQuery
 OAUTH_SCOPES = [
@@ -48,9 +54,12 @@ OAUTH_CLIENT_CONFIG = {
 }
 
 # Cache file for OAuth credentials (persists across sessions)
-CREDENTIALS_CACHE = os.path.join(
-    os.path.expanduser("~"), ".clustering_app_oauth_credentials.json"
-)
+def _get_creds_cache_path():
+    if os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true":
+        return os.path.join(_tempfile.gettempdir(), ".clustering_app_oauth_credentials.json")
+    return os.path.join(os.path.expanduser("~"), ".clustering_app_oauth_credentials.json")
+
+CREDENTIALS_CACHE = _get_creds_cache_path()
 
 
 # ════════════════════════════════════════════════════
@@ -67,8 +76,11 @@ def _save_oauth_credentials(creds):
         "client_secret": creds.client_secret,
         "scopes": list(creds.scopes) if creds.scopes else OAUTH_SCOPES,
     }
-    with open(CREDENTIALS_CACHE, "w") as f:
-        json.dump(data, f)
+    try:
+        with open(CREDENTIALS_CACHE, "w") as f:
+            json.dump(data, f)
+    except OSError:
+        pass  # Read-only filesystem on Cloud
 
 
 def _load_cached_oauth_credentials():
@@ -114,7 +126,9 @@ def _connect_from_streamlit_secrets():
     Returns (client, auth_mode) or (None, None).
     """
     try:
-        creds_dict = dict(st.secrets.get("gcp_credentials", {}))
+        raw = st.secrets.get("gcp_credentials", {})
+        # Deep-convert Streamlit's AttrDict to plain dict
+        creds_dict = json.loads(json.dumps(dict(raw)))
         if not creds_dict or "type" not in creds_dict:
             return None, None
     except Exception:
@@ -129,7 +143,7 @@ def _connect_from_streamlit_secrets():
                 creds_dict, scopes=OAUTH_SCOPES
             )
             client = bigquery.Client(project=PROJECT_ID, credentials=creds)
-            list(client.list_datasets(max_results=1))
+            client.query("SELECT 1").result()
             return client, "service_account"
 
         elif cred_type == "authorized_user":
@@ -142,7 +156,7 @@ def _connect_from_streamlit_secrets():
             )
             creds.refresh(AuthRequest())
             client = bigquery.Client(project=PROJECT_ID, credentials=creds)
-            list(client.list_datasets(max_results=1))
+            client.query("SELECT 1").result()
             return client, "google_oauth"
 
     except Exception:
@@ -168,7 +182,7 @@ def auto_connect():
     # Option A — Application Default Credentials (gcloud auth — local dev)
     try:
         client = bigquery.Client(project=PROJECT_ID)
-        list(client.list_datasets(max_results=1))
+        client.query("SELECT 1").result()
         return client, "adc", None
     except Exception:
         pass
@@ -178,7 +192,7 @@ def auto_connect():
         creds = _load_cached_oauth_credentials()
         if creds:
             client = bigquery.Client(project=PROJECT_ID, credentials=creds)
-            list(client.list_datasets(max_results=1))
+            client.query("SELECT 1").result()
             return client, "google_oauth", None
     except Exception:
         pass
@@ -427,13 +441,17 @@ def fetch_awb_data(client, cluster_df):
         Awn_number_with_latlong = query_job.to_dataframe(timeout=300)
 
         # Save CSV exactly like notebook
-        output_file = "outputs/Awb_with_polygon_mapping.csv"
-        Awn_number_with_latlong.to_csv(output_file, index=False)
-
-        if os.path.exists(output_file):
-            return Awn_number_with_latlong, None
-        else:
-            return Awn_number_with_latlong, "CSV not saved to disk"
+        output_dir = _get_cache_dir()
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError:
+            pass
+        output_file = os.path.join(output_dir, "Awb_with_polygon_mapping.csv")
+        try:
+            Awn_number_with_latlong.to_csv(output_file, index=False)
+        except OSError:
+            pass  # Read-only FS on Cloud — data is still in memory
+        return Awn_number_with_latlong, None
 
     except GoogleAPIError as e:
         return None, f"BigQuery API Error: {e}"
@@ -466,8 +484,7 @@ def _save_live_clusters_cache(df):
     """Save live clusters data to local cache with today's date."""
     try:
         cache_dir = os.path.dirname(LIVE_CLUSTERS_CACHE_FILE)
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(cache_dir, exist_ok=True)
         cache = {
             "fetched_date": datetime.now().strftime("%Y-%m-%d"),
             "fetched_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -476,8 +493,8 @@ def _save_live_clusters_cache(df):
         }
         with open(LIVE_CLUSTERS_CACHE_FILE, "w") as f:
             json.dump(cache, f, default=str)
-    except Exception as e:
-        print(f"Cache save error: {e}")
+    except (OSError, Exception):
+        pass  # Silently fail on Cloud read-only FS
 
 
 def fetch_live_clusters(client, force_refresh=False):
@@ -518,9 +535,12 @@ def fetch_live_clusters(client, force_refresh=False):
 
 
 def fetch_hub_locations(client, year, month):
-    """Fetch hub locations with year/month. No demo fallback."""
+    """Fetch hub locations with year/month. Cached in session_state by (year, month)."""
+    cache_key = f"hub_loc_cache_{year}_{month}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key], None
     try:
-        query = f"""
+        query = """
         SELECT eh.creation_date, eh.id, eh.name,
             COALESCE(ehl.latitude, eh.latitude) AS latitude,
             COALESCE(ehl.longitude, eh.longitude) AS longitude,
@@ -528,10 +548,17 @@ def fetch_hub_locations(client, year, month):
         FROM `data-warehousing-391512.ecommerce.ecommerce_hub` eh
         LEFT JOIN `data-warehousing-391512.analytics_tables.ecommerce_hub_locations` ehl
             ON eh.id = ehl.hub_id
-            AND ehl.year = {year}
-            AND ehl.month = {month}
+            AND ehl.year = @year
+            AND ehl.month = @month
         """
-        result = client.query(query).to_dataframe(timeout=300)
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("year", "INT64", int(year)),
+                bigquery.ScalarQueryParameter("month", "INT64", int(month)),
+            ]
+        )
+        result = client.query(query, job_config=job_config).to_dataframe(timeout=300)
+        st.session_state[cache_key] = result
         return result, None
     except GoogleAPIError as e:
         return None, f"BigQuery API Error: {e}"
@@ -561,14 +588,20 @@ def _get_web_oauth_config():
 
 
 def _get_redirect_uri():
-    """Get OAuth redirect URI from secrets/env. Defaults to localhost for local dev."""
+    """Get OAuth redirect URI from secrets/env. Auto-detects Streamlit Cloud URL."""
     uri = None
     try:
         uri = st.secrets.get("REDIRECT_URI")
     except Exception:
         pass
     if not uri:
-        uri = os.environ.get("REDIRECT_URI", "http://localhost:8501")
+        uri = os.environ.get("REDIRECT_URI")
+    if not uri:
+        # Auto-detect: on Streamlit Cloud, construct from hostname
+        if os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true":
+            st.warning("REDIRECT_URI not set in secrets. OAuth redirect may not work. "
+                       "Add REDIRECT_URI = \"https://your-app.streamlit.app/\" to your Streamlit secrets.")
+        uri = "http://localhost:8501"
     return uri.rstrip("/")
 
 
@@ -640,7 +673,7 @@ def handle_oauth_callback(code):
 
         client = bigquery.Client(project=PROJECT_ID, credentials=creds)
         # Verify the connection works
-        list(client.list_datasets(max_results=1))
+        client.query("SELECT 1").result()
         return client, None
     except Exception as e:
         return None, str(e)

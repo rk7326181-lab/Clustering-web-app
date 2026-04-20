@@ -3,13 +3,87 @@ AI Payout Recommendation Agent — Groq (Llama 3).
 Enhanced with full app awareness for the Geo Intelligence Portal.
 """
 import json
+import os
 import pandas as pd
+
+try:
+    import streamlit as st
+    HAS_STREAMLIT = True
+except ImportError:
+    HAS_STREAMLIT = False
 
 try:
     from groq import Groq
     HAS_GROQ = True
 except ImportError:
     HAS_GROQ = False
+
+
+MODEL_FALLBACK_CHAIN = [
+    "moonshotai/kimi-k2-instruct",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+]
+
+
+def _resolve_api_key(api_key=None):
+    """Resolve Groq API key from: arg → session_state → st.secrets → env."""
+    if api_key:
+        return api_key
+    if HAS_STREAMLIT:
+        try:
+            sk = st.session_state.get("groq_api_key", "")
+            if sk:
+                return sk
+        except Exception:
+            pass
+        try:
+            sk = st.secrets.get("GROQ_API_KEY", "")
+            if sk:
+                return sk
+        except Exception:
+            pass
+    return os.environ.get("GROQ_API_KEY", "")
+
+
+def _friendly_error(exc):
+    """Parse common Groq exceptions into actionable user-facing messages."""
+    s = str(exc)
+    low = s.lower()
+    if "401" in s or "unauthorized" in low or "invalid api key" in low:
+        return "Invalid Groq API key. Add a valid key in the sidebar or set `GROQ_API_KEY` in Streamlit secrets."
+    if "429" in s or "rate limit" in low:
+        return "Groq rate limit hit. Wait a moment and retry."
+    if "model" in low and ("not found" in low or "decommission" in low or "does not exist" in low):
+        return "The selected Groq model is unavailable. The agent tried fallback models but none worked."
+    if "timeout" in low or "timed out" in low:
+        return "Groq request timed out. The service may be slow — try again."
+    if "connection" in low or "network" in low:
+        return "Network error reaching Groq. Check internet connectivity."
+    return f"Groq API error: {s}"
+
+
+def _groq_chat(messages, api_key, temperature=0.3, max_tokens=1500):
+    """Call Groq with model fallback + timeout. Returns response content or raises."""
+    client = Groq(api_key=api_key, timeout=30.0)
+    last_exc = None
+    for model in MODEL_FALLBACK_CHAIN:
+        try:
+            resp = client.chat.completions.create(
+                model=model, messages=messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            return resp.choices[0].message.content
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            # Only fall through on model-level errors; re-raise auth/rate-limit immediately
+            if "401" in str(e) or "unauthorized" in msg or "429" in str(e) or "rate limit" in msg:
+                raise
+            continue
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("No Groq models available")
 
 # ════════════════════════════════════════════════════
 # SYSTEM PROMPTS
@@ -172,9 +246,7 @@ Typical: C1=₹0, C2=₹1, C3=₹2 ... C9=₹8, C10+=₹10–₹14 for extended 
 
 def run_auto_analysis(report_df, insights, api_key):
     """Run automatic analysis on financial data. Returns report string."""
-    import os
-    if not api_key:
-        api_key = os.environ.get("GROQ_API_KEY", "")
+    api_key = _resolve_api_key(api_key)
     if not HAS_GROQ or not api_key:
         return _fallback_analysis(insights)
 
@@ -193,27 +265,22 @@ Provide:
 7. Pincode-level Anomalies (any unexpected high burn)"""
 
     try:
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="moonshotai/kimi-k2-instruct",
+        return _groq_chat(
             messages=[
                 {"role": "system", "content": FINANCIAL_PROMPT},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3, max_tokens=1500,
+            api_key=api_key, temperature=0.3, max_tokens=1500,
         )
-        return response.choices[0].message.content
     except Exception as e:
-        return f"⚠️ Groq API error: {e}\n\n" + _fallback_analysis(insights)
+        return f"⚠️ {_friendly_error(e)}\n\n" + _fallback_analysis(insights)
 
 
 def chat_with_agent(question, report_df, insights, chat_history, api_key):
     """Handle follow-up questions about financials. Returns response string."""
-    import os
-    if not api_key:
-        api_key = os.environ.get("GROQ_API_KEY", "")
+    api_key = _resolve_api_key(api_key)
     if not HAS_GROQ or not api_key:
-        return "Please set your Groq API key to enable AI chat."
+        return "Please set your Groq API key to enable AI chat (sidebar or `GROQ_API_KEY` in Streamlit secrets)."
 
     context = _build_context(report_df, insights)
     messages = [
@@ -224,14 +291,9 @@ def chat_with_agent(question, report_df, insights, chat_history, api_key):
     messages.append({"role": "user", "content": question})
 
     try:
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="moonshotai/kimi-k2-instruct", messages=messages,
-            temperature=0.3, max_tokens=1024,
-        )
-        return response.choices[0].message.content
+        return _groq_chat(messages=messages, api_key=api_key, temperature=0.3, max_tokens=1024)
     except Exception as e:
-        return f"⚠️ Error: {e}"
+        return f"⚠️ {_friendly_error(e)}"
 
 
 # ════════════════════════════════════════════════════
@@ -320,9 +382,7 @@ def run_burn_analysis(session_state, api_key):
 
     context = "\n".join(summary_lines)
 
-    import os
-    if not api_key:
-        api_key = os.environ.get("GROQ_API_KEY", "")
+    api_key = _resolve_api_key(api_key)
 
     if not HAS_GROQ or not api_key:
         return context + "\n\n*Add Groq API key for AI cost-reduction recommendations.*"
@@ -340,18 +400,15 @@ Analyze the following burn data and provide:
 Be specific, use ₹ amounts, and keep recommendations actionable."""
 
     try:
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="moonshotai/kimi-k2-instruct",
+        return _groq_chat(
             messages=[
                 {"role": "system", "content": "You are a logistics payout optimization expert. Use ₹ for currency. Be specific and data-driven."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3, max_tokens=2000,
+            api_key=api_key, temperature=0.3, max_tokens=2000,
         )
-        return response.choices[0].message.content
     except Exception as e:
-        return f"⚠️ Groq API error: {e}\n\n{context}"
+        return f"⚠️ {_friendly_error(e)}\n\n{context}"
 
 
 def app_agent_chat(question, session_state, chat_history, api_key):
@@ -359,9 +416,7 @@ def app_agent_chat(question, session_state, chat_history, api_key):
     Full app-aware AI agent. Can answer questions about the app,
     analyze data, and guide the user through the pipeline.
     """
-    import os
-    if not api_key:
-        api_key = os.environ.get("GROQ_API_KEY", "")
+    api_key = _resolve_api_key(api_key)
     if not HAS_GROQ or not api_key:
         return _app_agent_fallback(question, session_state)
 
@@ -374,14 +429,9 @@ def app_agent_chat(question, session_state, chat_history, api_key):
     messages.append({"role": "user", "content": question})
 
     try:
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="moonshotai/kimi-k2-instruct", messages=messages,
-            temperature=0.4, max_tokens=1500,
-        )
-        return response.choices[0].message.content
+        return _groq_chat(messages=messages, api_key=api_key, temperature=0.4, max_tokens=1500)
     except Exception as e:
-        return f"⚠️ Groq API error: {e}\n\n" + _app_agent_fallback(question, session_state)
+        return f"⚠️ {_friendly_error(e)}\n\n" + _app_agent_fallback(question, session_state)
 
 
 def run_live_cluster_analysis(live_cluster_df, awb_df, api_key):
@@ -421,7 +471,8 @@ def run_live_cluster_analysis(live_cluster_df, awb_df, api_key):
             )
 
     context = "\n".join(summary_lines)
-    if not api_key:
+    api_key = _resolve_api_key(api_key)
+    if not HAS_GROQ or not api_key:
         return context + "\n\n*Add Groq API key to get AI recommendations.*"
 
     prompt = f"""Analyze the following Shadowfax live cluster and AWB data.
@@ -437,21 +488,15 @@ Provide:
 Be specific, use ₹ amounts, reference hub names directly."""
 
     try:
-        import os
-        if not api_key:
-            api_key = os.environ.get("GROQ_API_KEY", "")
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="moonshotai/kimi-k2-instruct",
+        return _groq_chat(
             messages=[
                 {"role": "system", "content": APP_AGENT_PROMPT},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.2, max_tokens=2000,
+            api_key=api_key, temperature=0.2, max_tokens=2000,
         )
-        return response.choices[0].message.content
     except Exception as e:
-        return f"⚠️ AI error: {e}\n\n{context}"
+        return f"⚠️ {_friendly_error(e)}\n\n{context}"
 
 
 def _app_agent_fallback(question, session_state):

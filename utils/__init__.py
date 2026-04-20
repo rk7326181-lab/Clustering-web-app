@@ -38,7 +38,13 @@ FALLBACK_PINCODE_MAP = {
     584128: "C2", 110074: "C2", 800001: "C0",
 }
 
-OUTPUT_DIR = "outputs"
+def _get_output_dir():
+    """Use /tmp/ on Streamlit Cloud (read-only filesystem), local outputs/ otherwise."""
+    if os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true":
+        return os.path.join("/tmp", "outputs")
+    return "outputs"
+
+OUTPUT_DIR = _get_output_dir()
 HUB_IMG_DIR = os.path.join(OUTPUT_DIR, "Hub_Payout_Views_Final_All_Hubs")
 
 # Hub color palette — light, semi-transparent, distinct per hub
@@ -92,7 +98,7 @@ def create_circle_polygon(lat, lon, radius_km, points=15):
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    """Haversine distance in km."""
+    """Haversine distance in km (scalar version)."""
     R = 6371
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -100,6 +106,27 @@ def haversine_km(lat1, lon1, lat2, lon2):
          + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
          * math.sin(dlon / 2) ** 2)
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def haversine_km_vectorized(lat1, lon1, lat2, lon2):
+    """Haversine distance in km — vectorized with NumPy for entire columns at once."""
+    R = 6371
+    lat1_r, lat2_r = np.radians(lat1), np.radians(lat2)
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1_r) * np.cos(lat2_r) * np.sin(dlon / 2) ** 2
+    return R * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+
+
+def get_pricing_vectorized(distances):
+    """Vectorized pricing slab assignment for a pandas Series or numpy array."""
+    result = pd.Series("Nil", index=range(len(distances)))
+    d = pd.to_numeric(distances, errors="coerce")
+    for lo, hi, label in PRICING_SLABS:
+        mask = d < hi
+        result[mask & (result == "Nil")] = label
+    result[d.isna()] = "Nil"
+    return result.values
 
 
 # ============================================================
@@ -179,10 +206,10 @@ def reload_from_disk():
 
     # ── Slow fallback: CSV files for anything DuckDB didn't have ──
     csv_mapping = [
-        ("final_output_df", "outputs/final_output.csv"),
-        ("polygon_records_df", "outputs/Clustering_payout_polygon_latest.csv"),
-        ("awb_raw_df", "outputs/Awb_with_polygon_mapping.csv"),
-        ("final_result_df", "outputs/Awb_with_cluster_info.csv"),
+        ("final_output_df", os.path.join(OUTPUT_DIR, "final_output.csv")),
+        ("polygon_records_df", os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_latest.csv")),
+        ("awb_raw_df", os.path.join(OUTPUT_DIR, "Awb_with_polygon_mapping.csv")),
+        ("final_result_df", os.path.join(OUTPUT_DIR, "Awb_with_cluster_info.csv")),
     ]
     for key, path in csv_mapping:
         if st.session_state.get(key) is None:
@@ -209,8 +236,11 @@ def reload_from_disk():
 # ============================================================
 
 def ensure_output_dirs():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(HUB_IMG_DIR, exist_ok=True)
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        os.makedirs(HUB_IMG_DIR, exist_ok=True)
+    except OSError:
+        pass  # Read-only filesystem on Cloud
 
 
 def get_download_bytes(df, fmt="csv"):

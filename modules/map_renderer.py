@@ -80,6 +80,15 @@ class MapRenderer:
             If specified, center map on this hub
         """
 
+        if cluster_df is None or len(cluster_df) == 0:
+            m = folium.Map(location=self.default_location, zoom_start=self.default_zoom,
+                           tiles='OpenStreetMap', control_scale=True)
+            folium.Marker(
+                location=self.default_location,
+                icon=folium.DivIcon(html="<div style='background:#fee; padding:8px 12px; border:1px solid #f00; border-radius:4px; font-family:Arial; font-size:12px;'>No cluster data available</div>")
+            ).add_to(m)
+            return m
+
         # Determine map center
         if selected_hub and len(cluster_df[cluster_df['hub_name'] == selected_hub]) > 0:
             hub_data = hub_df[hub_df['name'] == selected_hub].iloc[0]
@@ -131,6 +140,9 @@ class MapRenderer:
 
             # Get color based on surge rate
             color = self._get_rate_color(surge_amount)
+
+            # Simplify geometry to reduce map HTML size
+            geom = geom.simplify(0.001, preserve_topology=True)
 
             # Convert geometry to GeoJSON
             geo_json = mapping(geom)

@@ -18,6 +18,27 @@ except ImportError:
 st.set_page_config(page_title="Geo Intelligence Portal — Shadowfax", page_icon="🗺️", layout="wide", initial_sidebar_state="expanded")
 
 # ═══════════════════════════════════════════════════════
+# HANDLE OAUTH CALLBACK — Must run BEFORE access control
+# so the auth code from Google redirect is processed
+# ═══════════════════════════════════════════════════════
+_oauth_code = st.query_params.get("code")
+if _oauth_code and st.session_state.get("bq_client") is None:
+    try:
+        from modules.bigquery_client import handle_oauth_callback
+        _client, _err = handle_oauth_callback(_oauth_code)
+        if _client:
+            st.session_state["bq_client"] = _client
+            st.session_state["bq_auth_mode"] = "google_oauth"
+            st.session_state["authenticated"] = True  # Auto-authenticate on OAuth success
+            st.query_params.clear()
+            st.rerun()
+        else:
+            st.query_params.clear()
+            st.session_state["_oauth_error"] = _err
+    except Exception:
+        st.query_params.clear()
+
+# ═══════════════════════════════════════════════════════
 # ACCESS CONTROL — Only allowed users can use the app
 # ═══════════════════════════════════════════════════════
 def _check_access():
@@ -259,7 +280,8 @@ from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
                    clean_pincode, get_download_bytes, show_df_download,
                    detect_latlon_cols, detect_geojson_pincode_field,
                    haversine_km, get_pricing, get_hub_color_map,
-                   CLUSTER_MAP, DESCRIPTION_MAPPING, HUB_COLORS, PRICING_SLABS)
+                   CLUSTER_MAP, DESCRIPTION_MAPPING, HUB_COLORS, PRICING_SLABS,
+                   OUTPUT_DIR, HUB_IMG_DIR)
 
 init_session_state()
 ensure_output_dirs()
@@ -284,19 +306,7 @@ def add_log(msg, level="info"):
 from modules.bigquery_client import init_bq_on_startup
 init_bq_on_startup()
 
-# ── Handle Google OAuth callback (redirect from Google sign-in) ──
-_oauth_code = st.query_params.get("code")
-if _oauth_code and st.session_state.get("bq_client") is None:
-    from modules.bigquery_client import handle_oauth_callback
-    _client, _err = handle_oauth_callback(_oauth_code)
-    if _client:
-        st.session_state["bq_client"] = _client
-        st.session_state["bq_auth_mode"] = "google_oauth"
-        st.query_params.clear()
-        st.rerun()
-    else:
-        st.query_params.clear()
-        st.session_state["_oauth_error"] = _err
+# (OAuth callback handled at top of file, before access control)
 
 if loaded:
     for f in loaded:
@@ -307,12 +317,17 @@ if loaded:
 # ═══════════════════════════════════════════════════════
 # Load Shadowfax logo
 import base64
-_logo_path = os.path.join(os.path.dirname(__file__), "shadowfax_logo.jpeg")
-_logo_b64 = ""
-if os.path.exists(_logo_path):
-    with open(_logo_path, "rb") as _lf:
-        _logo_b64 = base64.b64encode(_lf.read()).decode()
-_logo_src = f"data:image/jpeg;base64,{_logo_b64}" if _logo_b64 else "https://www.shadowfax.in/wp-content/uploads/2023/10/Logo-1.svg"
+
+@st.cache_data(show_spinner=False)
+def _load_logo():
+    logo_path = os.path.join(os.path.dirname(__file__), "shadowfax_logo.jpeg")
+    if os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        return f"data:image/jpeg;base64,{b64}"
+    return "https://www.shadowfax.in/wp-content/uploads/2023/10/Logo-1.svg"
+
+_logo_src = _load_logo()
 
 st.sidebar.markdown(f"""<div class="sfx-brand">
 <img src="{_logo_src}">
@@ -621,21 +636,23 @@ if st.session_state.get("auto_run_requested"):
                 vlat = st.session_state.get("vol_lat_col", "Volumetric Lat")
                 vlon = st.session_state.get("vol_long_col", "Volumetric Long")
                 merged = pd.merge(clean_pincode(cdf.copy()), clean_pincode(pdf.copy()), on="Pincode", how="left")
-                dists = []
-                for _, row in merged.iterrows():
-                    hl, ho = row.get("Hub_lat"), row.get("Hub_long")
-                    vl, vo = row.get(vlat), row.get(vlon)
-                    dk = None
-                    if pd.notna(hl) and pd.notna(ho) and pd.notna(vl) and pd.notna(vo):
-                        dk = haversine_km(float(hl), float(ho), float(vl), float(vo))
-                    dists.append(dk)
-                merged["Distance"] = dists
-                merged["SP&A Aligned P mapping"] = merged["Distance"].apply(get_pricing)
+                from utils import haversine_km_vectorized, get_pricing_vectorized
+                hl = pd.to_numeric(merged["Hub_lat"], errors="coerce")
+                ho = pd.to_numeric(merged["Hub_long"], errors="coerce")
+                vl_col = pd.to_numeric(merged[vlat], errors="coerce")
+                vo_col = pd.to_numeric(merged[vlon], errors="coerce")
+                valid = hl.notna() & ho.notna() & vl_col.notna() & vo_col.notna()
+                merged["Distance"] = np.nan
+                if valid.any():
+                    merged.loc[valid, "Distance"] = haversine_km_vectorized(
+                        hl[valid].values, ho[valid].values, vl_col[valid].values, vo_col[valid].values
+                    )
+                merged["SP&A Aligned P mapping"] = get_pricing_vectorized(merged["Distance"])
                 out_cols = ["Pincode", "Hub_Name", "Hub_lat", "Hub_long", vlat, vlon, "Distance", "SP&A Aligned P mapping"]
                 final = merged[[c for c in out_cols if c in merged.columns]].copy()
                 st.session_state["final_output_df"] = final
-                os.makedirs("outputs", exist_ok=True)
-                final.to_csv("outputs/final_output.csv", index=False)
+                ensure_output_dirs()
+                final.to_csv(os.path.join(OUTPUT_DIR, "final_output.csv"), index=False)
                 steps_completed.append(f"Step 2: P-Mapping ✅ ({len(final)} records)")
                 add_log(f"Auto-run: P-Mapping complete ({len(final)} records)", "success")
             except Exception as e:
@@ -651,7 +668,7 @@ if st.session_state.get("auto_run_requested"):
                 fodf = st.session_state["final_output_df"]
                 poly_df = generate_polygons(fodf)
                 st.session_state["polygon_records_df"] = poly_df
-                poly_df.to_csv("outputs/Clustering_payout_polygon_latest.csv", index=False)
+                poly_df.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_latest.csv"), index=False)
                 steps_completed.append(f"Step 3: Polygon Gen ✅ ({len(poly_df)} polygons)")
                 add_log(f"Auto-run: Polygons generated ({len(poly_df)})", "success")
             except Exception as e:
@@ -678,7 +695,7 @@ if st.session_state.get("auto_run_requested"):
                         result_df = assign_clusters(awb_df, poly_df)
                         result_df = calculate_financials(result_df)
                         st.session_state["final_result_df"] = result_df
-                        result_df.to_csv("outputs/Awb_with_cluster_info.csv", index=False)
+                        result_df.to_csv(os.path.join(OUTPUT_DIR, "Awb_with_cluster_info.csv"), index=False)
                         steps_completed.append(f"Step 4: AWB Analysis ✅ ({len(result_df)} AWBs)")
                         add_log(f"Auto-run: AWB analysis complete ({len(result_df)} AWBs)", "success")
                     else:
@@ -827,10 +844,10 @@ if nav.startswith("1"):
     st.markdown('<div class="sfx-header">Load Existing Files</div>', unsafe_allow_html=True)
     lc1, lc2, lc3, lc4 = st.columns(4)
     for col, key, paths, label in [
-        (lc1, "final_output_df", ["outputs/final_output.csv", "data/final_output.csv"], "final_output"),
-        (lc2, "polygon_records_df", ["outputs/Clustering_payout_polygon_latest.csv", "outputs/Clustering_payout_polygon_4KM.csv", "data/Clustering_payout_polygon_4KM.csv"], "polygons"),
-        (lc3, "awb_raw_df", ["outputs/Awb_with_polygon_mapping.csv", "data/Awb_with_polygon_mapping.csv"], "AWB raw"),
-        (lc4, "final_result_df", ["outputs/Awb_with_cluster_info.csv", "data/Awb_with_cluster_info.csv"], "AWB cluster"),
+        (lc1, "final_output_df", [os.path.join(OUTPUT_DIR, "final_output.csv"), "data/final_output.csv"], "final_output"),
+        (lc2, "polygon_records_df", [os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_latest.csv"), os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_4KM.csv"), "data/Clustering_payout_polygon_4KM.csv"], "polygons"),
+        (lc3, "awb_raw_df", [os.path.join(OUTPUT_DIR, "Awb_with_polygon_mapping.csv"), "data/Awb_with_polygon_mapping.csv"], "AWB raw"),
+        (lc4, "final_result_df", [os.path.join(OUTPUT_DIR, "Awb_with_cluster_info.csv"), "data/Awb_with_cluster_info.csv"], "AWB cluster"),
     ]:
         with col:
             if st.button(f"Load {label}", key=f"ql_{key}"):
@@ -871,25 +888,43 @@ elif nav.startswith("2"):
     use_osrm = st.checkbox("Use OSRM API (road distance)", value=False)
     if st.button("Calculate Distances", type="primary", key="calc_dist"):
         prog = st.progress(0); add_log("P-Mapping calculation started", "info")
-        dists = []
-        for i, (_, row) in enumerate(merged.iterrows()):
-            hl, ho, vl, vo = row.get("Hub_lat"), row.get("Hub_long"), row.get(vlat), row.get(vlon)
-            dk = None
-            if pd.notna(hl) and pd.notna(ho) and pd.notna(vl) and pd.notna(vo):
-                if use_osrm:
+        from utils import haversine_km_vectorized, get_pricing_vectorized
+        if use_osrm:
+            # OSRM: row-by-row (API calls required)
+            import requests as _req
+            dists = []
+            for i, (_, row) in enumerate(merged.iterrows()):
+                hl, ho, vl, vo = row.get("Hub_lat"), row.get("Hub_long"), row.get(vlat), row.get(vlon)
+                dk = None
+                if pd.notna(hl) and pd.notna(ho) and pd.notna(vl) and pd.notna(vo):
                     try:
-                        import requests; r = requests.get(f"http://router.project-osrm.org/route/v1/driving/{ho},{hl};{vo},{vl}?overview=false", timeout=10).json()
+                        r = _req.get(f"http://router.project-osrm.org/route/v1/driving/{ho},{hl};{vo},{vl}?overview=false", timeout=10).json()
                         if r.get("code") == "Ok":
                             dk = r["routes"][0]["distance"] / 1000
-                    except:
+                    except Exception:
                         pass
-                if dk is None:
-                    dk = haversine_km(float(hl), float(ho), float(vl), float(vo))
-            dists.append(dk); prog.progress((i + 1) / len(merged))
-        merged["Distance"] = dists; merged["SP&A Aligned P mapping"] = merged["Distance"].apply(get_pricing)
+                    if dk is None:
+                        dk = haversine_km(float(hl), float(ho), float(vl), float(vo))
+                dists.append(dk); prog.progress((i + 1) / len(merged))
+            merged["Distance"] = dists
+        else:
+            # Vectorized haversine — ~100x faster than row-by-row
+            prog.progress(0.3)
+            hl = pd.to_numeric(merged["Hub_lat"], errors="coerce")
+            ho = pd.to_numeric(merged["Hub_long"], errors="coerce")
+            vl = pd.to_numeric(merged[vlat], errors="coerce")
+            vo_col = pd.to_numeric(merged[vlon], errors="coerce")
+            valid = hl.notna() & ho.notna() & vl.notna() & vo_col.notna()
+            merged["Distance"] = np.nan
+            if valid.any():
+                merged.loc[valid, "Distance"] = haversine_km_vectorized(
+                    hl[valid].values, ho[valid].values, vl[valid].values, vo_col[valid].values
+                )
+            prog.progress(0.8)
+        merged["SP&A Aligned P mapping"] = get_pricing_vectorized(merged["Distance"])
         out_cols = ["Pincode", "Hub_Name", "Hub_lat", "Hub_long", vlat, vlon, "Distance", "SP&A Aligned P mapping"]
         final = merged[[c for c in out_cols if c in merged.columns]].copy()
-        st.session_state["final_output_df"] = final; final.to_csv("outputs/final_output.csv", index=False); prog.empty()
+        st.session_state["final_output_df"] = final; final.to_csv(os.path.join(OUTPUT_DIR, "final_output.csv"), index=False); prog.empty()
         add_log(f"P-Mapping complete: {len(final)} records", "success")
         st.markdown('<div class="sfx-ok">✅ P-Mapping calculation complete!</div>', unsafe_allow_html=True)
 
@@ -1059,7 +1094,7 @@ elif nav.startswith("3"):
                     full = st.session_state["polygon_records_df"]
                     full = full[full[hub_col] != hub_filter]
                     st.session_state["polygon_records_df"] = pd.concat([full, edited], ignore_index=True)
-                st.session_state["polygon_records_df"].to_csv("outputs/Clustering_payout_polygon_edited.csv", index=False, encoding="utf-8-sig")
+                st.session_state["polygon_records_df"].to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"), index=False, encoding="utf-8-sig")
                 add_log("Polygon data saved", "success")
                 st.markdown('<div class="sfx-ok">✅ Saved!</div>', unsafe_allow_html=True)
         with ec2:
@@ -1192,7 +1227,7 @@ elif nav.startswith("3"):
                 from shapely.wkt import loads as wkt_loads
                 import geopandas as gpd
                 import contextily as ctx
-                out_dir = "outputs/Hub_Payout_Views_Final_All_Hubs"; os.makedirs(out_dir, exist_ok=True)
+                out_dir = HUB_IMG_DIR; ensure_output_dirs()
                 all_hubs = pdf[hub_col].unique().tolist(); hcm = get_hub_color_map(all_hubs); hp = st.progress(0)
                 for hi, hn in enumerate(all_hubs):
                     hps = pdf[pdf[hub_col] == hn]
@@ -1347,7 +1382,7 @@ elif nav.startswith("4"):
                     start = time.time()
                     res = assign_clusters(awb, poly, spa, progress_cb=lambda p: prog.progress(p))
                     prog.empty(); fin = calculate_financials(res)
-                    st.session_state["final_result_df"] = fin; fin.to_csv("outputs/Awb_with_cluster_info.csv", index=False)
+                    st.session_state["final_result_df"] = fin; fin.to_csv(os.path.join(OUTPUT_DIR, "Awb_with_cluster_info.csv"), index=False)
                     el = time.time() - start
                     add_log(f"P&L calculated: {len(fin):,} AWBs in {el:.1f}s", "success")
                     st.markdown(f'<div class="sfx-ok">✅ {len(fin):,} AWBs processed in {el:.1f}s</div>', unsafe_allow_html=True)
@@ -1663,11 +1698,27 @@ elif nav.startswith("5"):
                     map_cluster_df["center_lat"] = clats
                     map_cluster_df["center_lon"] = clons
                 if "rate_category" not in map_cluster_df.columns:
-                    map_cluster_df["rate_category"] = map_cluster_df["surge_amount"].apply(
+                    # Coerce surge_amount to numeric and fill NaN so comparisons don't silently fail
+                    _sa = pd.to_numeric(map_cluster_df.get("surge_amount", 0), errors="coerce").fillna(0)
+                    map_cluster_df["rate_category"] = _sa.apply(
                         lambda x: "₹0 (Base)" if x == 0 else ("₹1-₹3 (Low)" if x <= 3 else ("₹4-₹6 (Medium)" if x <= 6 else ("₹7-₹10 (High)" if x <= 10 else "₹11+ (Very High)")))
                     )
 
+            # Normalize hub_df column names so MapRenderer finds 'id', 'name', 'latitude', 'longitude'
             map_hub_df = lhd.copy() if lhd is not None else pd.DataFrame()
+            if not map_hub_df.empty:
+                rename_map = {}
+                if "id" not in map_hub_df.columns and "hub_id" in map_hub_df.columns:
+                    rename_map["hub_id"] = "id"
+                if "name" not in map_hub_df.columns and "hub_name" in map_hub_df.columns:
+                    rename_map["hub_name"] = "name"
+                if rename_map:
+                    map_hub_df = map_hub_df.rename(columns=rename_map)
+
+            # Empty-data guard
+            if map_cluster_df.empty or "geometry" not in map_cluster_df.columns:
+                st.warning("No cluster geometry available to render. Fetch live clusters first.")
+                st.stop()
 
             map_obj = renderer.create_cluster_map(
                 map_cluster_df,
@@ -2306,10 +2357,17 @@ with st.expander("Activity Log", expanded=False):
 # AUTO-PERSIST — Sync session DataFrames to DuckDB
 # ═══════════════════════════════════════════════════════
 try:
-    from modules.duckdb_store import TABLE_MAP, save_df
-    for _ss_key in TABLE_MAP:
-        _df = st.session_state.get(_ss_key)
-        if _df is not None and hasattr(_df, "to_csv") and not _df.empty:
-            save_df(_ss_key, _df)
+    from modules.duckdb_store import TABLE_MAP, save_df, _is_streamlit_cloud
+    # Skip auto-persist on Cloud (read-only FS, /tmp/ is ephemeral anyway)
+    # On local, only persist once per session to avoid repeated writes on every rerun
+    if not _is_streamlit_cloud() and not st.session_state.get("_duckdb_persisted"):
+        _any_saved = False
+        for _ss_key in TABLE_MAP:
+            _df = st.session_state.get(_ss_key)
+            if _df is not None and hasattr(_df, "to_csv") and not _df.empty:
+                save_df(_ss_key, _df)
+                _any_saved = True
+        if _any_saved:
+            st.session_state["_duckdb_persisted"] = True
 except Exception:
     pass

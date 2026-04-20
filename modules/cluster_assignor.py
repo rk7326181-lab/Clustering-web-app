@@ -1,5 +1,6 @@
 """
 Point-in-Polygon Cluster Assignment + Financial Calculations.
+Uses Shapely STRtree spatial index for fast lookups.
 """
 import pandas as pd
 import numpy as np
@@ -7,6 +8,7 @@ import streamlit as st
 from shapely.wkt import loads as load_wkt
 from shapely.geometry import Point
 from shapely.prepared import prep
+from shapely import STRtree
 from utils import DESCRIPTION_MAPPING, FALLBACK_PINCODE_MAP
 
 
@@ -15,6 +17,7 @@ def load_clusters(polygon_df):
     df = polygon_df.copy()
     df.columns = df.columns.str.strip()
     clusters = []
+    polygons = []
     for _, row in df.iterrows():
         try:
             polygon = load_wkt(row["Polygon WKT"])
@@ -24,17 +27,30 @@ def load_clusters(polygon_df):
                 "description": row.get("Cluster_Category", row.get("cluster_category", "")),
                 "description_raw": row.get("Description", ""),
             })
+            polygons.append(polygon)
         except Exception:
             continue
-    return clusters
+    # Build spatial index for fast lookups
+    tree = STRtree(polygons) if polygons else None
+    return clusters, polygons, tree
 
 
-def get_cluster_for_point(lat, lon, clusters):
+def get_cluster_for_point(lat, lon, clusters, polygons=None, tree=None):
     if pd.isna(lat) or pd.isna(lon): return None, None
     try:
         point = Point(float(lon), float(lat))  # Shapely: (lon, lat)
     except (ValueError, TypeError):
         return None, None
+
+    # Use spatial index if available — much faster than linear scan
+    if tree is not None and polygons:
+        candidates = tree.query(point)
+        for idx in candidates:
+            if clusters[idx]["prepared"].contains(point):
+                return clusters[idx]["name"], clusters[idx]["description"]
+        return None, None
+
+    # Fallback: linear scan
     for c in clusters:
         if c["prepared"].contains(point):
             return c["name"], c["description"]
@@ -42,7 +58,7 @@ def get_cluster_for_point(lat, lon, clusters):
 
 
 def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
-    clusters = load_clusters(polygon_df)
+    clusters, polygons, tree = load_clusters(polygon_df)
     df = awb_df.copy()
     df.columns = df.columns.str.strip().str.lower()
     df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
@@ -54,7 +70,7 @@ def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
     total = len(df)
     for i, (_, row) in enumerate(df.iterrows()):
         lat, lon, pc = row["lat"], row["long"], row.get("pincode", "")
-        name, desc = get_cluster_for_point(lat, lon, clusters)
+        name, desc = get_cluster_for_point(lat, lon, clusters, polygons, tree)
         if not name:
             try:
                 pc_int = int(float(str(pc)))

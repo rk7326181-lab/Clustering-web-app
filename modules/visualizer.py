@@ -146,6 +146,8 @@ def _add_surge_legend(map_obj):
 
 def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False, viz_mode="none", hub_filter=None, rate_filter=None, hub_type_filter=None):
     if not HAS_FOLIUM: return None
+    if polygon_df is None or len(polygon_df) == 0:
+        return None
     df = polygon_df.copy(); df.columns = df.columns.str.strip()
 
     # Compute center from polygon centroids for accurate centering
@@ -196,6 +198,8 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
             wkt = row.get("Polygon WKT", "")
             if pd.isna(wkt) or not wkt: continue
             poly = wkt_loads(wkt)
+            # Simplify polygon to reduce map HTML size (~100m tolerance)
+            poly = poly.simplify(0.001, preserve_topology=True)
             latlon = [[lat, lon] for lon, lat in poly.exterior.coords]
             cc = row.get("Cluster_Code", "")
             hub = row.get(hub_col, "")
@@ -335,8 +339,10 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
     return m
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
 def _get_osrm_route(hub_lat, hub_lon, vol_lat, vol_lon):
-    """Fetch road route from OSRM. Returns (list of [lat, lon], distance_km) or (None, None)."""
+    """Fetch road route from OSRM. Returns (list of [lat, lon], distance_km) or (None, None).
+    Cached for 24h to avoid repeated API calls for same coordinate pairs."""
     try:
         url = (
             f"http://router.project-osrm.org/route/v1/driving/"
@@ -477,7 +483,6 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
                             locations=[[h_lat, h_lon], [row[vlat], row[vlon]]],
                             color="#0B8A7A", weight=1.5, opacity=0.5, dash_array="6",
                         ).add_to(m)
-                    time.sleep(0.1)  # rate-limit OSRM calls
 
     # Map tools
     MeasureControl(
