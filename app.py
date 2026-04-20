@@ -459,12 +459,20 @@ else:
 
     # Web OAuth flow (for Streamlit Cloud)
     from modules.bigquery_client import get_google_auth_url
+    _is_cloud = os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true"
     _auth_url, _auth_state = get_google_auth_url()
     if _auth_url:
         st.sidebar.link_button("🔐 Sign in with Google", _auth_url, type="primary", use_container_width=True)
         st.sidebar.caption("Redirects to Google for sign-in. No JSON key needed.")
+    elif _is_cloud:
+        # Web OAuth not configured — desktop flow won't work on Cloud, so show instructions
+        st.sidebar.error(
+            "Google OAuth not configured. Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, "
+            "and `REDIRECT_URI` to Streamlit secrets (or add `client_id` / `client_secret` "
+            "under the `[gcp_credentials]` section)."
+        )
     else:
-        # Fallback: local OAuth (desktop — run_local_server)
+        # Fallback: local OAuth (desktop — run_local_server) — only works on local machines
         if st.sidebar.button("Login with Google", key="google_oauth_btn", type="primary"):
             from modules.bigquery_client import handle_google_oauth_login
             with st.sidebar.spinner("Opening Google login..."):

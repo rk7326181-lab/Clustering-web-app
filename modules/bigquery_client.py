@@ -571,13 +571,32 @@ def fetch_hub_locations(client, year, month):
 # ════════════════════════════════════════════════════
 
 def _get_web_oauth_config():
-    """Get web OAuth client config from Streamlit secrets or environment."""
+    """Get web OAuth client config from Streamlit secrets or environment.
+
+    Looks in this order:
+      1. Top-level secrets: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
+      2. [gcp_credentials] section: client_id / client_secret
+      3. [google_oauth] section: client_id / client_secret
+      4. Env vars: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
+    """
     client_id, client_secret = None, None
     try:
         client_id = st.secrets.get("GOOGLE_CLIENT_ID")
         client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET")
     except Exception:
         pass
+    if not (client_id and client_secret):
+        for section_name in ("gcp_credentials", "google_oauth"):
+            try:
+                section = st.secrets.get(section_name, {})
+                if section:
+                    cid = section.get("client_id")
+                    csec = section.get("client_secret")
+                    if cid and csec:
+                        client_id, client_secret = cid, csec
+                        break
+            except Exception:
+                pass
     if not client_id:
         client_id = os.environ.get("GOOGLE_CLIENT_ID")
     if not client_secret:
