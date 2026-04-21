@@ -1110,16 +1110,138 @@ elif nav.startswith("3"):
 
         st.markdown('<div class="sfx-header">Map</div>', unsafe_allow_html=True)
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
-        edit_mode_s3 = st.toggle("Edit Mode", key="s3_edit_mode", value=False)
+        mode_c1, mode_c2 = st.columns(2)
+        with mode_c1:
+            edit_mode_s3 = st.toggle("✏️ Attribute Edit Mode", key="s3_edit_mode", value=False, help="Click a polygon to edit its rate, code, category.")
+        with mode_c2:
+            vertex_edit_s3 = st.toggle("🎨 Vertex Edit Mode (Reshape Polygons)", key="s3_vertex_edit", value=False, help="Drag polygon vertices to reshape them.")
+
         if edit_mode_s3:
-            st.info("Edit Mode ON — click a polygon on the map to edit its rate, rename, or delete it.")
+            st.info("**Attribute Edit Mode** — click a polygon on the map to edit its rate, rename, or delete it.")
+        if vertex_edit_s3:
+            st.info("**Vertex Edit Mode** — Use the toolbar (top-left): click the ✏ icon, then a polygon to drag its vertices (add/move/delete points). Click ✅ Save when done. Click 🎨 button below to apply edits to the dataset.")
         try:
             import folium
             from streamlit_folium import st_folium
             import streamlit.components.v1 as components
-            from modules.visualizer import create_polygon_map, create_polygon_map_cached, _df_hash
-            if edit_mode_s3:
-                # Edit mode: build fresh map for click interactivity
+            from modules.visualizer import create_polygon_map, create_polygon_map_cached, create_editable_polygon_map, _df_hash
+            if vertex_edit_s3:
+                # Vertex edit mode: polygons inside an editable FeatureGroup
+                m, edit_fg = create_editable_polygon_map(pdf, cdf, hub_filter=hub_filter, satellite=False)
+                if m is not None and edit_fg is not None:
+                    from folium.plugins import Draw
+                    Draw(
+                        export=False,
+                        position="topleft",
+                        draw_options={
+                            "polyline": False,
+                            "circle": False,
+                            "rectangle": False,
+                            "marker": False,
+                            "circlemarker": False,
+                            "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}},
+                        },
+                        edit_options={"poly": {"allowIntersection": False}},
+                    ).add_to(m)
+                    map_out_s3 = st_folium(
+                        m,
+                        width=1400,
+                        height=600,
+                        feature_group_to_add_to=edit_fg,
+                        returned_objects=["all_drawings", "last_active_drawing"],
+                        key="s3_vertex_map",
+                    )
+                else:
+                    map_out_s3 = None
+                    st.warning("Could not render editable map — no polygons to display.")
+
+                # Apply vertex edits button
+                if map_out_s3 and map_out_s3.get("all_drawings"):
+                    drawings = map_out_s3["all_drawings"]
+                    st.markdown(f'<div class="sfx-ok">📐 {len(drawings)} edited/drawn polygon(s) detected on map. Click below to apply.</div>', unsafe_allow_html=True)
+                    if st.button("🎨 Apply Vertex Edits to Dataset", type="primary", key="apply_vertex_edits"):
+                        from shapely.geometry import Polygon as ShapelyPolygon
+                        from shapely.wkt import loads as wkt_loads_apply
+                        poly_df = st.session_state.get("polygon_records_df").copy()
+                        wkt_col_name = "Polygon WKT" if "Polygon WKT" in poly_df.columns else "boundary"
+                        st.session_state["edit_undo_stack"].append(poly_df.copy())
+
+                        # Build centroid index of original polygons for matching
+                        original_centroids = []
+                        for i, r in poly_df.iterrows():
+                            try:
+                                p = wkt_loads_apply(str(r.get(wkt_col_name, "")))
+                                original_centroids.append((i, p.centroid.x, p.centroid.y))
+                            except Exception:
+                                continue
+
+                        matched_count = 0
+                        new_rows = []
+                        for drawing in drawings:
+                            geom = drawing.get("geometry", {})
+                            if geom.get("type") != "Polygon":
+                                continue
+                            coords = geom.get("coordinates", [[]])[0]
+                            if len(coords) < 4:
+                                continue
+                            new_poly = ShapelyPolygon([(c[0], c[1]) for c in coords])
+                            new_wkt = "POLYGON((" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + "))"
+                            new_cx, new_cy = new_poly.centroid.x, new_poly.centroid.y
+
+                            # Find nearest original centroid (within 0.05° ~ 5km)
+                            best_idx, best_dist = None, float("inf")
+                            for (orig_idx, ocx, ocy) in original_centroids:
+                                d = ((ocx - new_cx) ** 2 + (ocy - new_cy) ** 2) ** 0.5
+                                if d < best_dist and d < 0.05:
+                                    best_dist = d
+                                    best_idx = orig_idx
+
+                            if best_idx is not None:
+                                poly_df.at[best_idx, wkt_col_name] = new_wkt
+                                matched_count += 1
+                            else:
+                                # New polygon not matched to any original — needs user metadata
+                                new_rows.append({wkt_col_name: new_wkt})
+
+                        st.session_state["polygon_records_df"] = poly_df
+                        from_ss = os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv")
+                        try:
+                            poly_df.to_csv(from_ss, index=False, encoding="utf-8-sig")
+                        except Exception:
+                            pass
+                        add_log(f"Applied vertex edits: {matched_count} polygon(s) reshaped, {len(new_rows)} new unmatched", "success")
+                        if new_rows:
+                            st.session_state["_pending_new_polys"] = new_rows
+                        st.success(f"✅ Applied edits to {matched_count} polygon(s).")
+                        st.rerun()
+
+                # Prompt for metadata on unmatched new polygons
+                pending_new = st.session_state.get("_pending_new_polys")
+                if pending_new:
+                    st.markdown('<div class="sfx-header">New Drawn Polygons — Add Metadata</div>', unsafe_allow_html=True)
+                    with st.form(key="s3_new_poly_meta_form"):
+                        new_code = st.text_input("Cluster Code (e.g. 400701_A)", key="s3_new_code")
+                        new_hub = st.text_input("Hub Name", key="s3_new_hub")
+                        new_rate = st.number_input("Surge Rate (₹)", min_value=0.0, step=0.5, key="s3_new_rate")
+                        new_cat = st.text_input("Category (e.g. C3)", key="s3_new_cat")
+                        new_pin = st.text_input("Pincode", key="s3_new_pin")
+                        if st.form_submit_button("Save New Polygon(s)", type="primary"):
+                            poly_df = st.session_state.get("polygon_records_df").copy()
+                            for new_row in pending_new:
+                                new_row.update({
+                                    "Cluster_Code": new_code, "Hub Name": new_hub,
+                                    "Description": str(int(new_rate)) if new_rate == int(new_rate) else str(new_rate),
+                                    "Cluster_Category": new_cat, "Pincode": new_pin,
+                                    "surge_amount": new_rate,
+                                })
+                            st.session_state["polygon_records_df"] = pd.concat(
+                                [poly_df, pd.DataFrame(pending_new)], ignore_index=True
+                            )
+                            st.session_state["_pending_new_polys"] = None
+                            add_log(f"Added {len(pending_new)} new polygon(s): {new_code}", "success")
+                            st.rerun()
+            elif edit_mode_s3:
+                # Attribute edit mode: build fresh map for click interactivity
                 m = create_polygon_map(pdf, cdf, satellite=False, hub_filter=hub_filter)
                 from folium.plugins import Draw
                 Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)

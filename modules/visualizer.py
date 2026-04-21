@@ -339,6 +339,87 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
     return m
 
 
+def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, satellite=False):
+    """
+    Create a folium map with polygons in an editable FeatureGroup.
+    Returns (map, feature_group) — pass feature_group to st_folium's
+    feature_group_to_add_to param so Leaflet-Draw can edit existing polygons.
+    """
+    if not HAS_FOLIUM:
+        return None, None
+    if polygon_df is None or len(polygon_df) == 0:
+        return None, None
+
+    df = polygon_df.copy()
+    df.columns = df.columns.str.strip()
+
+    hub_col = "Hub Name" if "Hub Name" in df.columns else "hub_name"
+    if hub_filter and hub_filter != "All Hubs" and hub_col in df.columns:
+        df = df[df[hub_col] == hub_filter]
+
+    # Compute center from polygon centroids
+    center_lat, center_lon = 26.8, 92.7
+    lats, lons = [], []
+    wkt_col = "Polygon WKT" if "Polygon WKT" in df.columns else None
+    if wkt_col:
+        for wkt in df[wkt_col].dropna().head(50):
+            try:
+                poly = wkt_loads(str(wkt))
+                lats.append(poly.centroid.y)
+                lons.append(poly.centroid.x)
+            except Exception:
+                pass
+    if lats:
+        center_lat = float(np.mean(lats))
+        center_lon = float(np.mean(lons))
+
+    m = _base_map(center_lat, center_lon, satellite=satellite)
+
+    all_hubs = df[hub_col].unique().tolist() if hub_col in df.columns else []
+    hub_colors = get_hub_color_map(all_hubs)
+
+    # Editable feature group — polygons added here become editable via Draw plugin
+    fg = folium.FeatureGroup(name="editable_polygons")
+
+    pin_col = "Pincode" if "Pincode" in df.columns else "pincode"
+
+    for idx, row in df.iterrows():
+        try:
+            wkt = row.get("Polygon WKT", "")
+            if pd.isna(wkt) or not wkt:
+                continue
+            poly = wkt_loads(wkt)
+            latlon = [[lat, lon] for lon, lat in poly.exterior.coords]
+
+            cc = row.get("Cluster_Code", "")
+            hub = row.get(hub_col, "")
+            pincode = str(row.get(pin_col, ""))
+            desc = row.get("Description", "")
+            cat = row.get("Cluster_Category", "")
+            hub_color = hub_colors.get(hub, "#3498db")
+
+            popup_html = (
+                f"<b>{cc}</b><br>Hub: {hub}<br>Pincode: {pincode}"
+                f"<br>Rate: ₹{desc}<br>Category: {cat}"
+                f"<br><i>Idx: {idx}</i>"
+            )
+
+            folium.Polygon(
+                locations=latlon,
+                popup=folium.Popup(popup_html, max_width=280),
+                tooltip=f"{cc} — ₹{desc}",
+                color=hub_color,
+                weight=2.5,
+                fill=True,
+                fill_color=hub_color,
+                fill_opacity=0.35,
+            ).add_to(fg)
+        except Exception:
+            continue
+
+    return m, fg
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def _get_osrm_route(hub_lat, hub_lon, vol_lat, vol_lon):
     """Fetch road route from OSRM. Returns (list of [lat, lon], distance_km) or (None, None).
