@@ -90,6 +90,13 @@ def _base_map(center_lat, center_lon, zoom=9, satellite=False, draw_enabled=Fals
                 "circlemarker": False
             }
         ).add_to(m)
+    # Full-screen toggle on every map built on this base
+    Fullscreen(
+        position="topright",
+        title="Full Screen",
+        title_cancel="Exit Full Screen",
+        force_separate_button=True,
+    ).add_to(m)
     return m
 
 
@@ -308,7 +315,6 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
         secondary_length_unit="meters",
         primary_area_unit="sqkilometers",
     ).add_to(m)
-    Fullscreen(position="topright", title="Full Screen", title_cancel="Exit Full Screen", force_separate_button=True).add_to(m)
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
     _add_surge_legend(m)
@@ -575,7 +581,6 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
         secondary_length_unit="meters",
         primary_area_unit="sqkilometers",
     ).add_to(m)
-    Fullscreen(position="topright", title="Full Screen", title_cancel="Exit Full Screen", force_separate_button=True).add_to(m)
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
     _add_surge_legend(m)
