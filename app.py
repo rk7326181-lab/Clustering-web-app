@@ -302,6 +302,64 @@ if "app_logs" not in st.session_state:
 def add_log(msg, level="info"):
     st.session_state["app_logs"].append({"msg": msg, "level": level, "time": datetime.now().strftime("%H:%M:%S")})
 
+def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
+    """Render and save a PNG for a single hub using its current polygons. Returns the saved path or None."""
+    try:
+        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+        from shapely.wkt import loads as wkt_loads
+        import geopandas as gpd
+        import contextily as ctx
+        ensure_output_dirs()
+        hps = poly_df[poly_df[hub_col] == hub_name]
+        if hps.empty:
+            return None
+        cdf2 = cluster_df.copy(); cdf2.columns = cdf2.columns.str.strip()
+        hi2 = cdf2[cdf2["Hub_Name"] == hub_name]
+        if hi2.empty:
+            return None
+        hlat, hlon = float(hi2.iloc[0]["Hub_lat"]), float(hi2.iloc[0]["Hub_long"])
+        hcm = get_hub_color_map([hub_name])
+        fig, ax = plt.subplots(figsize=(14, 10))
+        polys_for_gdf, poly_labels = [], []
+        for _, row in hps.iterrows():
+            wkt = row.get("Polygon WKT", "")
+            if pd.isna(wkt) or not wkt:
+                continue
+            try:
+                polys_for_gdf.append(wkt_loads(wkt))
+                poly_labels.append(str(row.get("Description", "")))
+            except Exception:
+                pass
+        if polys_for_gdf:
+            gdf = gpd.GeoDataFrame({"label": poly_labels}, geometry=polys_for_gdf, crs="EPSG:4326").to_crs(epsg=3857)
+            gdf.plot(ax=ax, alpha=0.25, color=hcm.get(hub_name, "#3498db"), edgecolor="black", linewidth=1.5, zorder=2)
+            for _, rp in gdf.iterrows():
+                cx, cy = rp.geometry.centroid.x, rp.geometry.centroid.y
+                ax.text(cx, cy, rp["label"], ha="center", va="center", fontsize=9, fontweight="bold",
+                        bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, boxstyle="round,pad=0.3"), zorder=4)
+            hub_gdf = gpd.GeoDataFrame(geometry=[gpd.points_from_xy([hlon], [hlat])[0]], crs="EPSG:4326").to_crs(epsg=3857)
+            ax.plot(hub_gdf.geometry.iloc[0].x, hub_gdf.geometry.iloc[0].y, "r^", markersize=14, zorder=5)
+            try:
+                ctx.add_basemap(ax, source=ctx.providers.OpenStreetMap.Mapnik, zoom='auto')
+            except Exception:
+                try:
+                    ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron, zoom='auto')
+                except Exception:
+                    pass
+        else:
+            ax.plot(hlon, hlat, "r^", markersize=14, zorder=5)
+        ax.set_title(hub_name, fontsize=14, fontweight="bold", color="#0B8A7A")
+        ax.set_axis_off()
+        path = os.path.join(HUB_IMG_DIR, f"{hub_name.replace(' ', '_').replace('/', '_')}_Full_View.png")
+        plt.savefig(path, dpi=200, bbox_inches="tight", facecolor="white", pad_inches=0.1)
+        plt.close(fig); gc.collect()
+        st.session_state.setdefault("hub_images", {})[hub_name] = path
+        add_log(f"Regenerated image for {hub_name}", "success")
+        return path
+    except Exception as e:
+        add_log(f"Image regen failed for {hub_name}: {e}", "error")
+        return None
+
 # Auto-detect BigQuery on startup
 from modules.bigquery_client import init_bq_on_startup
 init_bq_on_startup()
@@ -1110,23 +1168,29 @@ elif nav.startswith("3"):
 
         st.markdown('<div class="sfx-header">Map</div>', unsafe_allow_html=True)
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
-        mode_c1, mode_c2 = st.columns(2)
-        with mode_c1:
-            edit_mode_s3 = st.toggle("✏️ Attribute Edit Mode", key="s3_edit_mode", value=False, help="Click a polygon to edit its rate, code, category.")
-        with mode_c2:
-            vertex_edit_s3 = st.toggle("🎨 Vertex Edit Mode (Reshape Polygons)", key="s3_vertex_edit", value=False, help="Drag polygon vertices to reshape them.")
-
-        if edit_mode_s3:
-            st.info("**Attribute Edit Mode** — click a polygon on the map to edit its rate, rename, or delete it.")
-        if vertex_edit_s3:
-            st.info("**Vertex Edit Mode** — Use the toolbar (top-left): click the ✏ icon, then a polygon to drag its vertices (add/move/delete points). Click ✅ Save when done. Click 🎨 button below to apply edits to the dataset.")
+        edit_polygons = st.toggle(
+            "🎨 Edit Polygons (Reshape / Draw / Delete)",
+            key="s3_edit_polygons",
+            value=False,
+            help="Single hub only. Drag vertices to reshape, draw new polygons, or delete existing ones.",
+        )
+        if edit_polygons and hub_filter == "All Hubs":
+            st.warning("⚠️ Select a single hub from the filter above to enable editing. Editing is disabled for 'All Hubs' view.")
+            edit_polygons = False
+        if edit_polygons:
+            st.info(
+                "**Editing enabled for hub:** `" + str(hub_filter) + "`  \n"
+                "• Click the ✏ icon on the left toolbar → click a polygon to drag its vertices  \n"
+                "• Click the ▭ icon to draw a new polygon  \n"
+                "• Click the 🗑 icon to delete a polygon  \n"
+                "• When done, hit **Save** on the toolbar, then click **Apply & Regenerate Image** below."
+            )
         try:
             import folium
             from streamlit_folium import st_folium
             import streamlit.components.v1 as components
-            from modules.visualizer import create_polygon_map, create_polygon_map_cached, create_editable_polygon_map, _df_hash
-            if vertex_edit_s3:
-                # Vertex edit mode: polygons inside an editable FeatureGroup
+            from modules.visualizer import create_polygon_map_cached, create_editable_polygon_map, _df_hash
+            if edit_polygons:
                 m, edit_fg = create_editable_polygon_map(pdf, cdf, hub_filter=hub_filter, satellite=False)
                 if m is not None and edit_fg is not None:
                     from folium.plugins import Draw
@@ -1147,36 +1211,37 @@ elif nav.startswith("3"):
                         m,
                         width=1400,
                         height=600,
-                        feature_group_to_add_to=edit_fg,
+                        feature_group_to_add=edit_fg,
                         returned_objects=["all_drawings", "last_active_drawing"],
-                        key="s3_vertex_map",
+                        key=f"s3_edit_map_{hub_filter}",
                     )
                 else:
                     map_out_s3 = None
-                    st.warning("Could not render editable map — no polygons to display.")
+                    st.warning("Could not render editable map — no polygons to display for this hub.")
 
-                # Apply vertex edits button
                 if map_out_s3 and map_out_s3.get("all_drawings"):
                     drawings = map_out_s3["all_drawings"]
-                    st.markdown(f'<div class="sfx-ok">📐 {len(drawings)} edited/drawn polygon(s) detected on map. Click below to apply.</div>', unsafe_allow_html=True)
-                    if st.button("🎨 Apply Vertex Edits to Dataset", type="primary", key="apply_vertex_edits"):
+                    st.markdown(
+                        f'<div class="sfx-ok">📐 {len(drawings)} polygon(s) on map (edits, new draws, and surviving originals).</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("💾 Apply & Regenerate Image", type="primary", key="apply_vertex_edits"):
                         from shapely.geometry import Polygon as ShapelyPolygon
                         from shapely.wkt import loads as wkt_loads_apply
                         poly_df = st.session_state.get("polygon_records_df").copy()
                         wkt_col_name = "Polygon WKT" if "Polygon WKT" in poly_df.columns else "boundary"
-                        st.session_state["edit_undo_stack"].append(poly_df.copy())
+                        st.session_state.setdefault("edit_undo_stack", []).append(poly_df.copy())
 
-                        # Build centroid index of original polygons for matching
+                        hub_mask = poly_df[hub_col] == hub_filter
                         original_centroids = []
-                        for i, r in poly_df.iterrows():
+                        for i, r in poly_df[hub_mask].iterrows():
                             try:
                                 p = wkt_loads_apply(str(r.get(wkt_col_name, "")))
                                 original_centroids.append((i, p.centroid.x, p.centroid.y))
                             except Exception:
                                 continue
 
-                        matched_count = 0
-                        new_rows = []
+                        matched_ids, new_rows, matched_count = set(), [], 0
                         for drawing in drawings:
                             geom = drawing.get("geometry", {})
                             if geom.get("type") != "Polygon":
@@ -1188,9 +1253,10 @@ elif nav.startswith("3"):
                             new_wkt = "POLYGON((" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + "))"
                             new_cx, new_cy = new_poly.centroid.x, new_poly.centroid.y
 
-                            # Find nearest original centroid (within 0.05° ~ 5km)
                             best_idx, best_dist = None, float("inf")
                             for (orig_idx, ocx, ocy) in original_centroids:
+                                if orig_idx in matched_ids:
+                                    continue
                                 d = ((ocx - new_cx) ** 2 + (ocy - new_cy) ** 2) ** 0.5
                                 if d < best_dist and d < 0.05:
                                     best_dist = d
@@ -1198,155 +1264,66 @@ elif nav.startswith("3"):
 
                             if best_idx is not None:
                                 poly_df.at[best_idx, wkt_col_name] = new_wkt
+                                matched_ids.add(best_idx)
                                 matched_count += 1
                             else:
-                                # New polygon not matched to any original — needs user metadata
                                 new_rows.append({wkt_col_name: new_wkt})
 
+                        deleted_ids = [i for (i, _, _) in original_centroids if i not in matched_ids]
+                        if deleted_ids:
+                            poly_df = poly_df.drop(index=deleted_ids).reset_index(drop=True)
+
                         st.session_state["polygon_records_df"] = poly_df
-                        from_ss = os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv")
                         try:
-                            poly_df.to_csv(from_ss, index=False, encoding="utf-8-sig")
+                            poly_df.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"), index=False, encoding="utf-8-sig")
                         except Exception:
                             pass
-                        add_log(f"Applied vertex edits: {matched_count} polygon(s) reshaped, {len(new_rows)} new unmatched", "success")
+                        add_log(f"[{hub_filter}] reshaped {matched_count}, deleted {len(deleted_ids)}, new {len(new_rows)}", "success")
                         if new_rows:
                             st.session_state["_pending_new_polys"] = new_rows
-                        st.success(f"✅ Applied edits to {matched_count} polygon(s).")
+                            st.session_state["_pending_new_polys_hub"] = hub_filter
+                        else:
+                            _regenerate_hub_image(hub_filter, poly_df, cdf, hub_col)
+                            st.success(f"✅ Applied edits and regenerated image for {hub_filter}.")
                         st.rerun()
 
-                # Prompt for metadata on unmatched new polygons
                 pending_new = st.session_state.get("_pending_new_polys")
                 if pending_new:
                     st.markdown('<div class="sfx-header">New Drawn Polygons — Add Metadata</div>', unsafe_allow_html=True)
                     with st.form(key="s3_new_poly_meta_form"):
                         new_code = st.text_input("Cluster Code (e.g. 400701_A)", key="s3_new_code")
-                        new_hub = st.text_input("Hub Name", key="s3_new_hub")
                         new_rate = st.number_input("Surge Rate (₹)", min_value=0.0, step=0.5, key="s3_new_rate")
                         new_cat = st.text_input("Category (e.g. C3)", key="s3_new_cat")
                         new_pin = st.text_input("Pincode", key="s3_new_pin")
-                        if st.form_submit_button("Save New Polygon(s)", type="primary"):
+                        if st.form_submit_button("Save & Regenerate Image", type="primary"):
                             poly_df = st.session_state.get("polygon_records_df").copy()
+                            target_hub = st.session_state.get("_pending_new_polys_hub", hub_filter)
                             for new_row in pending_new:
                                 new_row.update({
-                                    "Cluster_Code": new_code, "Hub Name": new_hub,
+                                    "Cluster_Code": new_code, hub_col: target_hub,
                                     "Description": str(int(new_rate)) if new_rate == int(new_rate) else str(new_rate),
                                     "Cluster_Category": new_cat, "Pincode": new_pin,
                                     "surge_amount": new_rate,
                                 })
-                            st.session_state["polygon_records_df"] = pd.concat(
-                                [poly_df, pd.DataFrame(pending_new)], ignore_index=True
-                            )
+                            poly_df = pd.concat([poly_df, pd.DataFrame(pending_new)], ignore_index=True)
+                            st.session_state["polygon_records_df"] = poly_df
                             st.session_state["_pending_new_polys"] = None
-                            add_log(f"Added {len(pending_new)} new polygon(s): {new_code}", "success")
+                            st.session_state["_pending_new_polys_hub"] = None
+                            add_log(f"Added {len(pending_new)} new polygon(s) to {target_hub}: {new_code}", "success")
+                            _regenerate_hub_image(target_hub, poly_df, cdf, hub_col)
                             st.rerun()
-            elif edit_mode_s3:
-                # Attribute edit mode: build fresh map for click interactivity
-                m = create_polygon_map(pdf, cdf, satellite=False, hub_filter=hub_filter)
-                from folium.plugins import Draw
-                Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)
-                map_out_s3 = st_folium(m, width=1400, height=600) if m else None
+
+                if st.session_state.get("edit_undo_stack"):
+                    if st.button("↶ Undo Last Edit", key="s3_undo"):
+                        st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
+                        st.rerun()
             else:
-                # Non-edit mode: use cached HTML for speed
                 html = create_polygon_map_cached(
                     _df_hash(pdf), _df_hash(cdf), "none",
                     pdf, cdf, None, False, "none", hub_filter, None, None,
                 )
                 if html:
                     components.html(html, height=620, scrolling=False)
-                map_out_s3 = None
-            if edit_mode_s3 and map_out_s3:
-                # Click-to-edit polygon
-                if edit_mode_s3 and map_out_s3 and map_out_s3.get("last_clicked"):
-                    from shapely.geometry import Point
-                    from shapely.wkt import loads as wkt_loads_click
-                    click_pt = Point(map_out_s3["last_clicked"]["lng"], map_out_s3["last_clicked"]["lat"])
-                    poly_df = st.session_state.get("polygon_records_df")
-                    if poly_df is not None:
-                        wkt_col_name = "Polygon WKT" if "Polygon WKT" in poly_df.columns else "boundary"
-                        for idx, row in poly_df.iterrows():
-                            try:
-                                poly_geom = wkt_loads_click(str(row.get(wkt_col_name, "")))
-                                if click_pt.within(poly_geom):
-                                    st.markdown(f'''<div class="sfx-card" style="border-left:4px solid #0B8A7A">
-                                        <b>Selected Polygon: {row.get("Cluster_Code", row.get("cluster_code", ""))}</b><br>
-                                        Hub: {row.get("Hub Name", row.get("hub_name", ""))} | Rate: ₹{row.get("Description", row.get("surge_amount", ""))} | Category: {row.get("Cluster_Category", "")}
-                                    </div>''', unsafe_allow_html=True)
-                                    with st.form(key=f"s3_map_edit_{idx}"):
-                                        new_rate = st.number_input("Surge Rate (₹)", value=float(row.get("Description", row.get("surge_amount", 0)) or 0), step=0.5, key=f"s3_rate_{idx}")
-                                        new_code = st.text_input("Cluster Code", value=str(row.get("Cluster_Code", row.get("cluster_code", ""))), key=f"s3_code_{idx}")
-                                        new_cat = st.text_input("Category", value=str(row.get("Cluster_Category", "")), key=f"s3_cat_{idx}")
-                                        col_s, col_d = st.columns(2)
-                                        with col_s:
-                                            if st.form_submit_button("Save Changes", type="primary"):
-                                                st.session_state["edit_undo_stack"].append(poly_df.copy())
-                                                if "Description" in poly_df.columns:
-                                                    poly_df.at[idx, "Description"] = str(int(new_rate)) if new_rate == int(new_rate) else str(new_rate)
-                                                if "surge_amount" in poly_df.columns:
-                                                    poly_df.at[idx, "surge_amount"] = new_rate
-                                                if "Cluster_Code" in poly_df.columns:
-                                                    poly_df.at[idx, "Cluster_Code"] = new_code
-                                                if "Cluster_Category" in poly_df.columns:
-                                                    poly_df.at[idx, "Cluster_Category"] = new_cat
-                                                st.session_state["polygon_records_df"] = poly_df
-                                                add_log(f"Edited polygon {new_code}: rate=₹{new_rate}", "success")
-                                                st.rerun()
-                                        with col_d:
-                                            if st.form_submit_button("Delete Polygon"):
-                                                st.session_state["edit_undo_stack"].append(poly_df.copy())
-                                                st.session_state["polygon_records_df"] = poly_df.drop(index=idx).reset_index(drop=True)
-                                                add_log(f"Deleted polygon {row.get('Cluster_Code', '')}", "warning")
-                                                st.rerun()
-                                    break
-                            except Exception:
-                                continue
-                elif map_out_s3 and map_out_s3.get("last_clicked"):
-                    click_lat = map_out_s3["last_clicked"]["lat"]
-                    click_lon = map_out_s3["last_clicked"]["lng"]
-                    st.markdown(f'<div class="sfx-card"><b>Clicked:</b> {click_lat:.6f}, {click_lon:.6f}</div>', unsafe_allow_html=True)
-                # Handle drawn polygons — let user name them
-                if edit_mode_s3 and map_out_s3 and map_out_s3.get("all_drawings"):
-                    for drawing in map_out_s3["all_drawings"]:
-                        if drawing.get("geometry", {}).get("type") == "Polygon":
-                            st.markdown('<div class="sfx-header">Name Your Drawn Polygon</div>', unsafe_allow_html=True)
-                            with st.form(key="s3_drawn_poly_form"):
-                                new_code = st.text_input("Cluster Code (e.g. 400701_A)", key="s3_drawn_code")
-                                new_hub = st.text_input("Hub Name", key="s3_drawn_hub")
-                                new_rate = st.number_input("Surge Rate (₹)", min_value=0.0, step=0.5, key="s3_drawn_rate")
-                                new_cat = st.text_input("Category (e.g. C3)", key="s3_drawn_cat")
-                                new_pin = st.text_input("Pincode", key="s3_drawn_pin")
-                                if st.form_submit_button("Save Drawn Polygon", type="primary"):
-                                    coords = drawing["geometry"]["coordinates"][0]
-                                    wkt_str = "POLYGON((" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + "))"
-                                    new_row = {
-                                        "Cluster_Code": new_code, "Hub Name": new_hub,
-                                        "Description": str(int(new_rate)) if new_rate == int(new_rate) else str(new_rate),
-                                        "Cluster_Category": new_cat, "Pincode": new_pin,
-                                        "Polygon WKT": wkt_str, "surge_amount": new_rate,
-                                    }
-                                    poly_df = st.session_state.get("polygon_records_df")
-                                    if poly_df is not None:
-                                        st.session_state["edit_undo_stack"].append(poly_df.copy())
-                                        st.session_state["polygon_records_df"] = pd.concat([poly_df, pd.DataFrame([new_row])], ignore_index=True)
-                                    else:
-                                        st.session_state["polygon_records_df"] = pd.DataFrame([new_row])
-                                    add_log(f"Saved drawn polygon: {new_code}", "success")
-                                    st.rerun()
-                            break  # Only handle the first drawn polygon at a time
-
-                # Undo / Redo buttons
-                if edit_mode_s3:
-                    ub1, ub2 = st.columns(2)
-                    with ub1:
-                        if st.button("Undo", key="s3_undo") and st.session_state.get("edit_undo_stack"):
-                            st.session_state["edit_redo_stack"].append(st.session_state["polygon_records_df"].copy())
-                            st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
-                            st.rerun()
-                    with ub2:
-                        if st.button("Redo", key="s3_redo") and st.session_state.get("edit_redo_stack"):
-                            st.session_state["edit_undo_stack"].append(st.session_state["polygon_records_df"].copy())
-                            st.session_state["polygon_records_df"] = st.session_state["edit_redo_stack"].pop()
-                            st.rerun()
         except ImportError:
             st.info("Install folium for maps.")
 
@@ -1734,36 +1711,50 @@ elif nav.startswith("5"):
 
     # ── Filters ───────────────────────────────────────────────────
     st.markdown('<div class="sfx-header">Filters</div>', unsafe_allow_html=True)
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    with fc1:
-        f_hub = st.selectbox("Hub Name", ["All"] + sorted(lcd["hub_name"].dropna().unique().tolist()), key="lc_fh")
-    with fc2:
-        f_hid = st.text_input("Hub ID", key="lc_fid")
-    with fc3:
-        f_pc = st.text_input("Pincode", key="lc_fpc", placeholder="e.g. 400701")
-    with fc4:
-        min_rate, max_rate = st.slider("Surge Rate Range (₹)", 0, 14, (0, 14), key="lc_rate_slider")
 
-    # Hub type filter if hub data available
+    # Hub type filter first — narrows hub_name list
     if lhd is not None and "hub_category" in lhd.columns:
         hub_cats = ["All Types"] + sorted(lhd["hub_category"].dropna().unique().tolist())
         f_type = st.selectbox("Hub Type (LM / SSC)", hub_cats, key="lc_htype")
     else:
         f_type = "All Types"
 
+    # Hub-name choices restricted by type
+    all_hub_names = sorted(lcd["hub_name"].dropna().unique().tolist())
+    if f_type != "All Types" and lhd is not None and "hub_category" in lhd.columns:
+        type_hubs = lhd[lhd["hub_category"] == f_type]["name"].tolist()
+        hub_choices = [h for h in all_hub_names if h in type_hubs]
+    else:
+        hub_choices = all_hub_names
+
+    f_hubs = st.multiselect(
+        "Hub Name(s) — leave empty for all",
+        hub_choices,
+        key="lc_fh_multi",
+        help="Pick one or more hubs. Used by filter + export.",
+    )
+
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        f_hid = st.text_input("Hub ID", key="lc_fid")
+    with fc2:
+        f_pc = st.text_input("Pincode", key="lc_fpc", placeholder="e.g. 400701")
+    with fc3:
+        min_rate, max_rate = st.slider("Surge Rate Range (₹)", 0, 14, (0, 14), key="lc_rate_slider")
+
     # Apply filters
     flt = lcd.copy()
-    if f_hub != "All":
-        flt = flt[flt["hub_name"] == f_hub]
+    if f_hubs:
+        flt = flt[flt["hub_name"].isin(f_hubs)]
+    elif f_type != "All Types" and lhd is not None and "hub_category" in lhd.columns:
+        type_hubs = lhd[lhd["hub_category"] == f_type]["name"].tolist()
+        flt = flt[flt["hub_name"].isin(type_hubs)]
     if f_hid:
         flt = flt[flt["hub_id"].astype(str).str.strip() == f_hid.strip()]
     if f_pc:
         pcs = [p.strip() for p in f_pc.split(",")]
         flt = flt[flt["pincode"].astype(str).isin(pcs)]
     flt = flt[(flt["surge_amount"] >= min_rate) & (flt["surge_amount"] <= max_rate)]
-    if f_type != "All Types" and lhd is not None and "hub_category" in lhd.columns:
-        type_hubs = lhd[lhd["hub_category"] == f_type]["name"].tolist()
-        flt = flt[flt["hub_name"].isin(type_hubs)]
 
     st.caption(f"Showing {len(flt):,} clusters after filters")
 
@@ -2192,10 +2183,119 @@ elif nav.startswith("5"):
     with lc_tab4:
         st.markdown('<div class="sfx-header">Export & Edit Live Clusters</div>', unsafe_allow_html=True)
 
+        # ── Multi-hub polygon export ─────────────────────────────────
+        st.markdown("#### Export Hub Polygons")
+        all_hub_list = sorted(flt["hub_name"].dropna().unique().tolist())
+        default_hubs = f_hubs if f_hubs else all_hub_list
+        exp_hubs = st.multiselect(
+            "Select hub(s) to export",
+            all_hub_list,
+            default=default_hubs,
+            key="lc_exp_hubs",
+            help="Pick one or more hubs whose polygons you want to download.",
+        )
+        exp_fmt_poly = st.radio(
+            "Polygon Export Format",
+            ["CSV", "GeoJSON", "KML"],
+            horizontal=True,
+            key="lc_exp_poly_fmt",
+        )
+        if st.button("Generate Polygon Export", type="primary", key="lc_exp_poly_btn"):
+            if not exp_hubs:
+                st.warning("Pick at least one hub.")
+            else:
+                sub = flt[flt["hub_name"].isin(exp_hubs)].copy()
+                wkt_col = "boundary" if "boundary" in sub.columns else ("Polygon WKT" if "Polygon WKT" in sub.columns else None)
+                if wkt_col is None:
+                    st.error("No polygon geometry column (boundary / Polygon WKT) found in the data.")
+                else:
+                    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+                    hubs_slug = "_".join(h.replace(" ", "") for h in exp_hubs[:3])
+                    if len(exp_hubs) > 3:
+                        hubs_slug += f"_+{len(exp_hubs)-3}more"
+                    base_name = f"hub_polygons_{hubs_slug}_{stamp}"
+
+                    if exp_fmt_poly == "CSV":
+                        csv_bytes = sub.to_csv(index=False).encode("utf-8-sig")
+                        st.download_button("⬇ Download CSV", csv_bytes, f"{base_name}.csv", "text/csv", key="dl_poly_csv")
+                    elif exp_fmt_poly == "GeoJSON":
+                        try:
+                            from shapely.wkt import loads as _wkt_loads
+                            from shapely.geometry import mapping as _shape_mapping
+                            features = []
+                            for _, r in sub.iterrows():
+                                try:
+                                    geom = _wkt_loads(str(r[wkt_col]))
+                                except Exception:
+                                    continue
+                                props = {k: (None if pd.isna(v) else v) for k, v in r.items() if k != wkt_col}
+                                for k, v in list(props.items()):
+                                    if hasattr(v, "isoformat"):
+                                        props[k] = v.isoformat()
+                                features.append({"type": "Feature", "geometry": _shape_mapping(geom), "properties": props})
+                            fc = {"type": "FeatureCollection", "features": features}
+                            st.download_button("⬇ Download GeoJSON", json.dumps(fc, default=str).encode("utf-8"),
+                                               f"{base_name}.geojson", "application/geo+json", key="dl_poly_geojson")
+                        except Exception as e:
+                            st.error(f"GeoJSON export error: {e}")
+                    elif exp_fmt_poly == "KML":
+                        try:
+                            from shapely.wkt import loads as _wkt_loads
+                            def _kml_coords(poly):
+                                parts = []
+                                ext = " ".join(f"{x},{y},0" for x, y in poly.exterior.coords)
+                                inner = "".join(
+                                    f"<innerBoundaryIs><LinearRing><coordinates>"
+                                    f"{' '.join(f'{x},{y},0' for x, y in ring.coords)}"
+                                    f"</coordinates></LinearRing></innerBoundaryIs>"
+                                    for ring in poly.interiors
+                                )
+                                parts.append(
+                                    f"<Polygon><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>{inner}</Polygon>"
+                                )
+                                return "".join(parts)
+
+                            def _xml_escape(s):
+                                return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+                                        .replace(">", "&gt;").replace('"', "&quot;"))
+
+                            kml_placemarks = []
+                            for _, r in sub.iterrows():
+                                try:
+                                    g = _wkt_loads(str(r[wkt_col]))
+                                except Exception:
+                                    continue
+                                geom_list = list(g.geoms) if g.geom_type == "MultiPolygon" else [g]
+                                for pg in geom_list:
+                                    geom_kml = _kml_coords(pg)
+                                    name_val = _xml_escape(r.get("cluster_code", r.get("hub_name", "")))
+                                    desc_fields = []
+                                    for k in ["hub_name", "hub_id", "cluster_code", "pincode", "cluster_category", "surge_amount", "is_active"]:
+                                        if k in r and not pd.isna(r[k]):
+                                            desc_fields.append(f"<b>{k}</b>: {_xml_escape(r[k])}")
+                                    desc = _xml_escape("<br/>".join(desc_fields))
+                                    kml_placemarks.append(
+                                        f"<Placemark><name>{name_val}</name>"
+                                        f"<description>{desc}</description>{geom_kml}</Placemark>"
+                                    )
+                            kml_doc = (
+                                '<?xml version="1.0" encoding="UTF-8"?>'
+                                '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+                                f"<name>{_xml_escape(base_name)}</name>"
+                                + "".join(kml_placemarks)
+                                + "</Document></kml>"
+                            )
+                            st.download_button("⬇ Download KML", kml_doc.encode("utf-8"),
+                                               f"{base_name}.kml", "application/vnd.google-earth.kml+xml", key="dl_poly_kml")
+                        except Exception as e:
+                            st.error(f"KML export error: {e}")
+
+        st.markdown("---")
+
         exp_c1, exp_c2 = st.columns(2)
 
         with exp_c1:
-            st.markdown("#### Export Options")
+            st.markdown("#### Other Exports")
             export_fmt = st.radio("Format", ["CSV — Cluster Data", "CSV — Hub Summary", "HTML — Interactive Map"], key="lc_exp_fmt")
 
             if st.button("Generate Export", type="primary", key="lc_exp_btn"):
