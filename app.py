@@ -1166,6 +1166,141 @@ elif nav.startswith("3"):
         with ec2:
             st.download_button("Download CSV", get_download_bytes(edited, "csv"), "polygon_edited.csv", "text/csv", key="dl_ed")
 
+        # ── Google My Maps-compatible export (polygons + hub point) ─────────
+        st.markdown('<div class="sfx-header">Export for Google My Maps</div>', unsafe_allow_html=True)
+        st.caption("Downloads polygons + hub location in one file. Upload the CSV or KML directly into Google My Maps.")
+        mm_c1, mm_c2, mm_c3 = st.columns([2, 1, 1])
+        with mm_c1:
+            st.markdown(
+                f"Scope: **{'All Hubs' if hub_filter == 'All Hubs' else hub_filter}** "
+                f"({len(dpdf)} polygon row(s))"
+            )
+        export_wkt_col = "Polygon WKT" if "Polygon WKT" in dpdf.columns else ("boundary" if "boundary" in dpdf.columns else None)
+        if export_wkt_col is None:
+            st.warning("No polygon geometry column (Polygon WKT / boundary) found — regenerate polygons first.")
+        else:
+            hubs_for_export = [hub_filter] if hub_filter != "All Hubs" else cdf["Hub_Name"].dropna().unique().tolist()
+            hub_loc_lookup = {}
+            cdf2 = cdf.copy(); cdf2.columns = cdf2.columns.str.strip()
+            for hn in hubs_for_export:
+                hr = cdf2[cdf2["Hub_Name"] == hn]
+                if not hr.empty:
+                    try:
+                        hub_loc_lookup[hn] = (float(hr.iloc[0]["Hub_lat"]), float(hr.iloc[0]["Hub_long"]))
+                    except Exception:
+                        pass
+
+            with mm_c2:
+                if st.button("⬇ CSV (My Maps)", key="mm_csv_btn", type="primary"):
+                    rows = []
+                    for hn, (hlat, hlon) in hub_loc_lookup.items():
+                        rows.append({
+                            "Name": f"HUB: {hn}",
+                            "Type": "Hub",
+                            "Hub Name": hn,
+                            "Cluster_Code": "",
+                            "Pincode": "",
+                            "Cluster_Category": "",
+                            "Rate": "",
+                            "Latitude": hlat,
+                            "Longitude": hlon,
+                            "WKT": f"POINT({hlon} {hlat})",
+                        })
+                    for _, r in dpdf.iterrows():
+                        wkt = r.get(export_wkt_col, "")
+                        if pd.isna(wkt) or not wkt:
+                            continue
+                        rows.append({
+                            "Name": str(r.get("Cluster_Code", r.get("cluster_code", ""))),
+                            "Type": "Polygon",
+                            "Hub Name": r.get(hub_col, ""),
+                            "Cluster_Code": r.get("Cluster_Code", r.get("cluster_code", "")),
+                            "Pincode": r.get("Pincode", r.get("pincode", "")),
+                            "Cluster_Category": r.get("Cluster_Category", ""),
+                            "Rate": r.get("Description", r.get("surge_amount", "")),
+                            "Latitude": "",
+                            "Longitude": "",
+                            "WKT": str(wkt),
+                        })
+                    mm_df = pd.DataFrame(rows)
+                    scope_slug = "AllHubs" if hub_filter == "All Hubs" else hub_filter.replace(" ", "_").replace("/", "_")
+                    st.download_button(
+                        "Download My Maps CSV",
+                        mm_df.to_csv(index=False).encode("utf-8-sig"),
+                        f"mymaps_{scope_slug}_{datetime.now().strftime('%Y%m%d')}.csv",
+                        "text/csv",
+                        key="mm_csv_dl",
+                    )
+                    st.caption("In My Maps: **Import** → select this CSV → positioning column = **WKT** → title column = **Name**.")
+
+            with mm_c3:
+                if st.button("⬇ KML (My Maps)", key="mm_kml_btn"):
+                    try:
+                        from shapely.wkt import loads as _mm_wkt
+                        def _xesc(s):
+                            return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+                                    .replace(">", "&gt;").replace('"', "&quot;"))
+                        placemarks = []
+                        for hn, (hlat, hlon) in hub_loc_lookup.items():
+                            placemarks.append(
+                                f"<Placemark><name>HUB: {_xesc(hn)}</name>"
+                                f"<styleUrl>#hubStyle</styleUrl>"
+                                f"<Point><coordinates>{hlon},{hlat},0</coordinates></Point></Placemark>"
+                            )
+                        for _, r in dpdf.iterrows():
+                            wkt = r.get(export_wkt_col, "")
+                            if pd.isna(wkt) or not wkt:
+                                continue
+                            try:
+                                g = _mm_wkt(str(wkt))
+                            except Exception:
+                                continue
+                            polys = list(g.geoms) if g.geom_type == "MultiPolygon" else [g]
+                            name_val = _xesc(r.get("Cluster_Code", r.get("cluster_code", "")))
+                            desc_bits = []
+                            for k_lab, k_field in [("Hub", hub_col), ("Pincode", "Pincode"),
+                                                   ("Category", "Cluster_Category"), ("Rate", "Description")]:
+                                if k_field in r and not pd.isna(r[k_field]):
+                                    desc_bits.append(f"{k_lab}: {_xesc(r[k_field])}")
+                            desc = " | ".join(desc_bits)
+                            for pg in polys:
+                                ext = " ".join(f"{x},{y},0" for x, y in pg.exterior.coords)
+                                inner = "".join(
+                                    f"<innerBoundaryIs><LinearRing><coordinates>"
+                                    f"{' '.join(f'{x},{y},0' for x, y in ring.coords)}"
+                                    f"</coordinates></LinearRing></innerBoundaryIs>"
+                                    for ring in pg.interiors
+                                )
+                                placemarks.append(
+                                    f"<Placemark><name>{name_val}</name>"
+                                    f"<description>{desc}</description>"
+                                    f"<styleUrl>#polyStyle</styleUrl>"
+                                    f"<Polygon><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates>"
+                                    f"</LinearRing></outerBoundaryIs>{inner}</Polygon></Placemark>"
+                                )
+                        kml = (
+                            '<?xml version="1.0" encoding="UTF-8"?>'
+                            '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+                            f"<name>Polygons - {_xesc(hub_filter)}</name>"
+                            '<Style id="hubStyle"><IconStyle><color>ff0000ff</color><scale>1.2</scale>'
+                            '<Icon><href>http://maps.google.com/mapfiles/kml/paddle/red-stars.png</href></Icon></IconStyle></Style>'
+                            '<Style id="polyStyle"><LineStyle><color>ff984e00</color><width>2</width></LineStyle>'
+                            '<PolyStyle><color>55984e00</color></PolyStyle></Style>'
+                            + "".join(placemarks)
+                            + "</Document></kml>"
+                        )
+                        scope_slug = "AllHubs" if hub_filter == "All Hubs" else hub_filter.replace(" ", "_").replace("/", "_")
+                        st.download_button(
+                            "Download My Maps KML",
+                            kml.encode("utf-8"),
+                            f"mymaps_{scope_slug}_{datetime.now().strftime('%Y%m%d')}.kml",
+                            "application/vnd.google-earth.kml+xml",
+                            key="mm_kml_dl",
+                        )
+                        st.caption("In My Maps: **Import** → select this KML. Hubs render as red stars, polygons as filled shapes.")
+                    except Exception as e:
+                        st.error(f"KML export error: {e}")
+
         st.markdown('<div class="sfx-header">Map</div>', unsafe_allow_html=True)
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
         edit_polygons = st.toggle(
