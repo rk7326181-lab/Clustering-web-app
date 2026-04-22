@@ -417,6 +417,9 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
         except Exception:
             continue
 
+    # The FG must live on the map so its JS variable is defined; Draw(feature_group=fg)
+    # then uses it as drawnItems, making existing polygons editable/deletable.
+    fg.add_to(m)
     return m, fg
 
 

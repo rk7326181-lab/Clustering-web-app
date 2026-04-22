@@ -1329,9 +1329,14 @@ elif nav.startswith("3"):
                 m, edit_fg = create_editable_polygon_map(pdf, cdf, hub_filter=hub_filter, satellite=False)
                 if m is not None and edit_fg is not None:
                     from folium.plugins import Draw
+                    # Pass the existing polygon FeatureGroup to Draw so leaflet-draw's
+                    # Edit/Delete tools operate on the existing polygons (not just on
+                    # new ones drawn during the session).
                     Draw(
                         export=False,
                         position="topleft",
+                        feature_group=edit_fg,
+                        show_geometry_on_click=False,
                         draw_options={
                             "polyline": False,
                             "circle": False,
@@ -1346,7 +1351,6 @@ elif nav.startswith("3"):
                         m,
                         width=1400,
                         height=600,
-                        feature_group_to_add=edit_fg,
                         returned_objects=["all_drawings", "last_active_drawing"],
                         key=f"s3_edit_map_{hub_filter}",
                     )
