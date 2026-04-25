@@ -850,6 +850,10 @@ if nav.startswith("1"):
     with c2:
         st.markdown('<div class="sfx-card">', unsafe_allow_html=True)
         st.markdown("#### Pincodes Reference")
+        # Show persistent status
+        _pin_saved = os.path.exists(os.path.join(OUTPUT_DIR, "pincodes_ref.csv"))
+        if _pin_saved and st.session_state.get("pincodes_df") is not None and not st.session_state.get("_pin_new_upload"):
+            st.markdown('<div class="sfx-ok">📂 Auto-loaded from disk — re-upload to replace</div>', unsafe_allow_html=True)
         f2 = st.file_uploader("Upload pincodes.csv", type=["csv"], key="up_pin")
         if f2:
             try:
@@ -867,14 +871,36 @@ if nav.startswith("1"):
                         lon_c = st.selectbox("Lon", df.columns.tolist(), key="sln")
                         st.session_state["vol_lat_col"] = lat_c; st.session_state["vol_long_col"] = lon_c
                     st.session_state["pincodes_df"] = df; st.session_state["upload_status"]["pincodes"] = True
+                    st.session_state["_pin_new_upload"] = True
                     add_log(f"Pincodes CSV loaded: {len(df)} rows", "success")
+                    # Persist to disk for future sessions
+                    try:
+                        ensure_output_dirs()
+                        df.to_csv(os.path.join(OUTPUT_DIR, "pincodes_ref.csv"), index=False, encoding="utf-8-sig")
+                        add_log("Pincodes CSV saved to disk (persistent)", "success")
+                    except Exception:
+                        pass
                     st.dataframe(df.head(5), height=150)
             except Exception as e:
                 st.error(str(e))
+        if _pin_saved:
+            if st.button("🗑 Clear Saved Pincodes", key="clear_pin_disk"):
+                try:
+                    os.remove(os.path.join(OUTPUT_DIR, "pincodes_ref.csv"))
+                    st.session_state["pincodes_df"] = None
+                    st.session_state["upload_status"]["pincodes"] = False
+                    add_log("Saved pincodes cleared from disk", "warning")
+                    st.rerun()
+                except Exception as _ce:
+                    st.error(str(_ce))
         st.markdown("</div>", unsafe_allow_html=True)
     with c3:
         st.markdown('<div class="sfx-card">', unsafe_allow_html=True)
         st.markdown("#### GeoJSON Boundaries")
+        # Show persistent status
+        _geo_saved = os.path.exists(os.path.join(OUTPUT_DIR, "geojson_boundaries.json"))
+        if _geo_saved and st.session_state.get("geojson_data") is not None and not st.session_state.get("_geo_new_upload"):
+            st.markdown('<div class="sfx-ok">📂 Auto-loaded from disk — re-upload to replace</div>', unsafe_allow_html=True)
         geo_mode = st.radio("Method", ["Upload", "File Path", "Skip"], horizontal=True, key="geo_mode")
         if geo_mode == "Upload":
             f3 = st.file_uploader("Upload .geojson", type=["geojson", "json"], key="up_geo")
@@ -886,7 +912,16 @@ if nav.startswith("1"):
                     else:
                         pf = detect_geojson_pincode_field(data); st.session_state["geojson_data"] = data; st.session_state["upload_status"]["geojson"] = True
                         st.session_state["geojson_pincode_field"] = pf
+                        st.session_state["_geo_new_upload"] = True
                         add_log(f"GeoJSON loaded: {len(data['features']):,} features", "success")
+                        # Persist to disk for future sessions
+                        try:
+                            ensure_output_dirs()
+                            with open(os.path.join(OUTPUT_DIR, "geojson_boundaries.json"), "w", encoding="utf-8") as _gf:
+                                json.dump(data, _gf)
+                            add_log("GeoJSON saved to disk (persistent)", "success")
+                        except Exception:
+                            pass
                         st.markdown(f'<div class="sfx-ok">✅ {len(data["features"]):,} features. Field: <b>{pf}</b></div>', unsafe_allow_html=True)
                 except Exception as e:
                     st.error(str(e))
@@ -899,12 +934,29 @@ if nav.startswith("1"):
                     pf = detect_geojson_pincode_field(data); st.session_state["geojson_data"] = data; st.session_state["upload_status"]["geojson"] = True
                     st.session_state["geojson_pincode_field"] = pf
                     add_log(f"GeoJSON loaded from path: {len(data['features']):,} features", "success")
+                    # Persist to disk
+                    try:
+                        ensure_output_dirs()
+                        with open(os.path.join(OUTPUT_DIR, "geojson_boundaries.json"), "w", encoding="utf-8") as _gf:
+                            json.dump(data, _gf)
+                    except Exception:
+                        pass
                     st.markdown(f'<div class="sfx-ok">✅ {len(data["features"]):,} features</div>', unsafe_allow_html=True)
                 except Exception as e:
                     st.error(str(e))
         else:
             st.session_state["geojson_source"] = "skipped"
             st.markdown('<div class="sfx-warn">GeoJSON skipped — polygon generation will require manual upload.</div>', unsafe_allow_html=True)
+        if _geo_saved:
+            if st.button("🗑 Clear Saved GeoJSON", key="clear_geo_disk"):
+                try:
+                    os.remove(os.path.join(OUTPUT_DIR, "geojson_boundaries.json"))
+                    st.session_state["geojson_data"] = None
+                    st.session_state["upload_status"]["geojson"] = False
+                    add_log("Saved GeoJSON cleared from disk", "warning")
+                    st.rerun()
+                except Exception as _ce:
+                    st.error(str(_ce))
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="sfx-header">Load Existing Files</div>', unsafe_allow_html=True)
@@ -1038,7 +1090,7 @@ elif nav.startswith("2"):
                 from folium.plugins import Draw
                 Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)
             if m:
-                map_out_s2 = st_folium(m, width=1400, height=550)
+                map_out_s2 = st_folium(m, width=None, height=550)
                 # Click-to-inspect
                 if map_out_s2 and map_out_s2.get("last_clicked"):
                     click_lat = map_out_s2["last_clicked"]["lat"]
@@ -1133,9 +1185,70 @@ elif nav.startswith("3"):
                 add_log(f"Polygon generation error: {str(e)}", "error")
                 st.error(str(e)); import traceback; st.code(traceback.format_exc())
         st.markdown("---")
-        pu = st.file_uploader("Or load polygon CSV", type=["csv"], key="up_poly2")
-        if pu:
-            st.session_state["polygon_records_df"] = pd.read_csv(pu); add_log("Polygon CSV loaded from upload", "success"); st.success("Loaded")
+        _ul1, _ul2 = st.columns(2)
+        with _ul1:
+            pu = st.file_uploader("Or load polygon CSV", type=["csv"], key="up_poly2")
+            if pu:
+                st.session_state["polygon_records_df"] = pd.read_csv(pu)
+                add_log("Polygon CSV loaded from upload", "success"); st.success("Loaded")
+        with _ul2:
+            pu_kml = st.file_uploader("Or load polygon KML", type=["kml", "xml"], key="up_poly_kml")
+            if pu_kml:
+                try:
+                    import xml.etree.ElementTree as ET
+                    _kml_ns = {"kml": "http://www.opengis.net/kml/2.2"}
+                    _tree = ET.parse(pu_kml)
+                    _root = _tree.getroot()
+                    # Try both namespaced and non-namespaced tags
+                    _placemarks = _root.findall(".//kml:Placemark", _kml_ns)
+                    if not _placemarks:
+                        _placemarks = _root.findall(".//Placemark")
+                    _kml_rows = []
+                    for _pm in _placemarks:
+                        _name = (_pm.find("kml:name", _kml_ns) or _pm.find("name"))
+                        _name = _name.text.strip() if _name is not None and _name.text else ""
+                        _desc = (_pm.find("kml:description", _kml_ns) or _pm.find("description"))
+                        _desc = _desc.text.strip() if _desc is not None and _desc.text else ""
+                        # Polygon geometry
+                        _poly_el = (_pm.find(".//kml:Polygon", _kml_ns) or _pm.find(".//Polygon"))
+                        if _poly_el is None:
+                            continue
+                        _coords_el = (_poly_el.find(".//kml:outerBoundaryIs//kml:coordinates", _kml_ns)
+                                      or _poly_el.find(".//outerBoundaryIs//coordinates"))
+                        if _coords_el is None or not _coords_el.text:
+                            continue
+                        _pts = []
+                        for _tok in _coords_el.text.strip().split():
+                            _parts = _tok.split(",")
+                            if len(_parts) >= 2:
+                                try:
+                                    _pts.append((float(_parts[0]), float(_parts[1])))
+                                except ValueError:
+                                    pass
+                        if len(_pts) < 4:
+                            continue
+                        _wkt = "POLYGON((" + ", ".join(f"{x} {y}" for x, y in _pts) + "))"
+                        _kml_rows.append({
+                            "Cluster_Code": _name,
+                            "Hub Name": "",
+                            "Pincode": "",
+                            "Cluster_Category": "",
+                            "Description": "",
+                            "Polygon WKT": _wkt,
+                        })
+                    if _kml_rows:
+                        _kml_df = pd.DataFrame(_kml_rows)
+                        existing = st.session_state.get("polygon_records_df")
+                        if existing is not None and not existing.empty:
+                            st.session_state["polygon_records_df"] = pd.concat([existing, _kml_df], ignore_index=True)
+                        else:
+                            st.session_state["polygon_records_df"] = _kml_df
+                        add_log(f"KML loaded: {len(_kml_rows)} polygons", "success")
+                        st.success(f"Loaded {len(_kml_rows)} polygons from KML")
+                    else:
+                        st.warning("No polygon placemarks found in KML file.")
+                except Exception as _kml_err:
+                    st.error(f"KML parse error: {_kml_err}")
 
     pdf = st.session_state.get("polygon_records_df")
     if pdf is not None:
@@ -1151,7 +1264,7 @@ elif nav.startswith("3"):
 
         st.markdown('<div class="sfx-header">Polygon Editor</div>', unsafe_allow_html=True)
         edited = st.data_editor(dpdf, use_container_width=True, height=400, num_rows="dynamic", key="poly_ed")
-        ec1, ec2 = st.columns(2)
+        ec1, ec2, ec3 = st.columns(3)
         with ec1:
             if st.button("Save Changes", type="primary", key="save_poly"):
                 if hub_filter == "All Hubs":
@@ -1164,7 +1277,56 @@ elif nav.startswith("3"):
                 add_log("Polygon data saved", "success")
                 st.markdown('<div class="sfx-ok">✅ Saved!</div>', unsafe_allow_html=True)
         with ec2:
-            st.download_button("Download CSV", get_download_bytes(edited, "csv"), "polygon_edited.csv", "text/csv", key="dl_ed")
+            st.download_button("⬇ Download CSV", get_download_bytes(edited, "csv"), "polygon_edited.csv", "text/csv", key="dl_ed")
+        with ec3:
+            # Standalone KML download for the polygon data (no hub markers — raw polygon KML)
+            _kml_wkt_col = "Polygon WKT" if "Polygon WKT" in edited.columns else ("boundary" if "boundary" in edited.columns else None)
+            if _kml_wkt_col:
+                try:
+                    from shapely.wkt import loads as _kml_wkt_loads
+                    def _xesc2(s):
+                        return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
+                    _poly_marks = []
+                    for _, _kr in edited.iterrows():
+                        _wkt2 = _kr.get(_kml_wkt_col, "")
+                        if pd.isna(_wkt2) or not _wkt2: continue
+                        try:
+                            _g2 = _kml_wkt_loads(str(_wkt2))
+                        except Exception: continue
+                        _polys2 = list(_g2.geoms) if _g2.geom_type == "MultiPolygon" else [_g2]
+                        _nm2 = _xesc2(_kr.get("Cluster_Code", _kr.get("cluster_code", "")))
+                        _desc2 = " | ".join(filter(None, [
+                            f"Hub: {_xesc2(_kr.get(hub_col,''))}" if _kr.get(hub_col) else "",
+                            f"Pincode: {_xesc2(_kr.get('Pincode',''))}" if _kr.get("Pincode") else "",
+                            f"Rate: ₹{_xesc2(_kr.get('Description',''))}" if _kr.get("Description") else "",
+                        ]))
+                        for _pg2 in _polys2:
+                            _ext2 = " ".join(f"{x},{y},0" for x,y in _pg2.exterior.coords)
+                            _poly_marks.append(
+                                f"<Placemark><name>{_nm2}</name><description>{_desc2}</description>"
+                                f"<styleUrl>#polyStyle</styleUrl>"
+                                f"<Polygon><outerBoundaryIs><LinearRing><coordinates>{_ext2}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>"
+                            )
+                    _kml_raw = (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+                        f'<name>Polygons</name>'
+                        '<Style id="polyStyle"><LineStyle><color>ff0B8A7A</color><width>2</width></LineStyle>'
+                        '<PolyStyle><color>550B8A7A</color></PolyStyle></Style>'
+                        + "".join(_poly_marks) + "</Document></kml>"
+                    )
+                    _scope2 = "AllHubs" if hub_filter == "All Hubs" else hub_filter.replace(" ","_").replace("/","_")
+                    st.download_button(
+                        "⬇ Download KML",
+                        _kml_raw.encode("utf-8"),
+                        f"polygons_{_scope2}.kml",
+                        "application/vnd.google-earth.kml+xml",
+                        key="dl_poly_kml",
+                    )
+                except Exception as _kml_ex:
+                    st.caption(f"KML unavailable: {_kml_ex}")
+            else:
+                st.caption("No geometry column for KML")
 
         # ── Google My Maps-compatible export (polygons + hub point) ─────────
         st.markdown('<div class="sfx-header">Export for Google My Maps</div>', unsafe_allow_html=True)
@@ -1347,9 +1509,16 @@ elif nav.startswith("3"):
                         },
                         edit_options={"poly": {"allowIntersection": False}},
                     ).add_to(m)
+                    # Fix: streamlit-folium looks for window.drawnItems, but folium 0.20
+                    # uses drawnItems_draw_control_<hex_hash> — regex mismatch means
+                    # all_drawings is always empty. Point window.drawnItems at the FG.
+                    _fg_js = edit_fg.get_name()
+                    m.get_root().script.add_child(
+                        folium.Element(f"window.drawnItems = {_fg_js};")
+                    )
                     map_out_s3 = st_folium(
                         m,
-                        width=1400,
+                        width=None,
                         height=600,
                         returned_objects=["all_drawings", "last_active_drawing"],
                         key=f"s3_edit_map_{hub_filter}",
@@ -1684,7 +1853,7 @@ elif nav.startswith("4"):
                 m = create_polygon_map(poly, cdf, rdf, satellite=False, viz_mode=viz_mode.lower(), hub_filter=sel_hub, rate_filter=rate_filter)
                 from folium.plugins import Draw
                 Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)
-                map_out_s4 = st_folium(m, width=1400, height=700) if m else None
+                map_out_s4 = st_folium(m, width=None, height=700) if m else None
             else:
                 # Non-edit mode: use cached HTML for speed
                 html = create_polygon_map_cached(

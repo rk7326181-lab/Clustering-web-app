@@ -1,6 +1,7 @@
 """
 Shared utilities — constants, geometry functions, helpers, session state.
 """
+import json
 import math
 import os
 import time
@@ -228,6 +229,54 @@ def reload_from_disk():
                     except Exception:
                         pass
                     break
+
+    # ── Persistent reference files: Pincodes CSV + GeoJSON ──
+    # These are saved once and reused across sessions (no need to re-upload)
+    if st.session_state.get("pincodes_df") is None:
+        for p in [os.path.join(OUTPUT_DIR, "pincodes_ref.csv"),
+                  os.path.join("data", "pincodes_ref.csv")]:
+            if os.path.exists(p):
+                try:
+                    df = pd.read_csv(p)
+                    st.session_state["pincodes_df"] = df
+                    st.session_state["upload_status"]["pincodes"] = True
+                    # Auto-detect lat/lon columns
+                    lat_candidates = ["Volumetric Lat","volumetric_lat","latitude","lat","Lat",
+                                      "delivery_latitude","vol_lat"]
+                    lon_candidates = ["Volumetric Long","volumetric_long","longitude","long","Long",
+                                      "delivery_longitude","vol_long"]
+                    for c in lat_candidates:
+                        if c in df.columns:
+                            st.session_state.setdefault("vol_lat_col", c); break
+                    for c in lon_candidates:
+                        if c in df.columns:
+                            st.session_state.setdefault("vol_long_col", c); break
+                    loaded.append("pincodes_ref.csv (persistent)")
+                except Exception:
+                    pass
+                break
+
+    if st.session_state.get("geojson_data") is None:
+        for p in [os.path.join(OUTPUT_DIR, "geojson_boundaries.json"),
+                  os.path.join("data", "geojson_boundaries.json")]:
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as _f:
+                        data = json.load(_f)
+                    if "features" in data:
+                        st.session_state["geojson_data"] = data
+                        st.session_state["upload_status"]["geojson"] = True
+                        # Auto-detect pincode field
+                        sample = data["features"][0].get("properties", {}) if data["features"] else {}
+                        for key in ["pincode", "Pincode", "PINCODE", "pin", "PIN"]:
+                            if key in sample:
+                                st.session_state.setdefault("geojson_pincode_field", key)
+                                break
+                        loaded.append("geojson_boundaries.json (persistent)")
+                except Exception:
+                    pass
+                break
+
     return loaded
 
 
