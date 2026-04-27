@@ -1078,14 +1078,18 @@ elif nav.startswith("2"):
 
         st.markdown('<div class="sfx-header">Map</div>', unsafe_allow_html=True)
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
-        edit_mode_s2 = st.toggle("Edit Mode", key="s2_edit_mode", value=False)
+        _s2mc1, _s2mc2 = st.columns(2)
+        with _s2mc1:
+            edit_mode_s2 = st.toggle("Edit Mode", key="s2_edit_mode", value=False)
+        with _s2mc2:
+            s2_rate_filter = st.selectbox("Rate Filter", ["All"] + [f"₹{i}" for i in range(0, 9)] + ["Nil"], key="s2_map_rate")
         if edit_mode_s2:
             st.info("Edit Mode ON — draw polygons on the map, click existing polygons to edit.")
         try:
             import folium
             from streamlit_folium import st_folium
             from modules.visualizer import create_osrm_map
-            m = create_osrm_map(fo, st.session_state.get("geojson_data"), satellite=False, hub_filter=hub_filter)
+            m = create_osrm_map(fo, st.session_state.get("geojson_data"), satellite=False, hub_filter=hub_filter, rate_filter=s2_rate_filter)
             if edit_mode_s2:
                 from folium.plugins import Draw
                 Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)
@@ -1465,12 +1469,19 @@ elif nav.startswith("3"):
 
         st.markdown('<div class="sfx-header">Map</div>', unsafe_allow_html=True)
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
-        edit_polygons = st.toggle(
-            "🎨 Edit Polygons (Reshape / Draw / Delete)",
-            key="s3_edit_polygons",
-            value=False,
-            help="Single hub only. Drag vertices to reshape, draw new polygons, or delete existing ones.",
-        )
+        _s3mc1, _s3mc2, _s3mc3 = st.columns([2, 1, 1])
+        with _s3mc1:
+            edit_polygons = st.toggle(
+                "🎨 Edit Polygons (Reshape / Draw / Delete)",
+                key="s3_edit_polygons",
+                value=False,
+                help="Single hub only. Drag vertices to reshape, draw new polygons, or delete existing ones.",
+            )
+        with _s3mc2:
+            s3_rate_filter = st.selectbox("Rate Filter", ["All"] + [f"₹{i}" for i in range(0, 9)] + ["Nil"], key="s3_map_rate")
+        with _s3mc3:
+            s3_viz_mode = st.radio("View Mode", ["Default", "Burn"], horizontal=True, key="s3_viz_mode",
+                                   help="Burn: color polygons by financial burn (requires AWB data from Step 4)")
         if edit_polygons and hub_filter == "All Hubs":
             st.warning("⚠️ Select a single hub from the filter above to enable editing. Editing is disabled for 'All Hubs' view.")
             edit_polygons = False
@@ -1626,9 +1637,11 @@ elif nav.startswith("3"):
                         st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
                         st.rerun()
             else:
+                _s3_awb = st.session_state.get("final_result_df")
+                _s3_vm = s3_viz_mode.lower() if s3_viz_mode != "Default" else "none"
                 html = create_polygon_map_cached(
-                    _df_hash(pdf), _df_hash(cdf), "none",
-                    pdf, cdf, None, False, "none", hub_filter, None, None,
+                    _df_hash(pdf), _df_hash(cdf), _df_hash(_s3_awb),
+                    pdf, cdf, _s3_awb, False, _s3_vm, hub_filter, s3_rate_filter, None,
                 )
                 if html:
                     components.html(html, height=620, scrolling=False)
