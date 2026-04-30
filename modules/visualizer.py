@@ -520,11 +520,12 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
                     except Exception:
                         pass
 
-    # Hub markers
+    # Hub markers — skip rows where lat/lon is NaN
     hubs = df.drop_duplicates(subset=[nm])
     for _, h in hubs.iterrows():
-        folium.Marker(location=[h[lc], h[nc]], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
-                      icon=folium.Icon(color="red", icon="home", prefix="fa")).add_to(m)
+        if pd.notna(h.get(lc)) and pd.notna(h.get(nc)):
+            folium.Marker(location=[float(h[lc]), float(h[nc])], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
+                          icon=folium.Icon(color="red", icon="home", prefix="fa")).add_to(m)
 
     # Volumetric point labels — show distance (km) + payout rate
     vlat = next((c for c in ["Volumetric Lat", "volumetric_lat", "vol_lat"] if c in df.columns), None)
@@ -535,56 +536,56 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
         df[vlon] = pd.to_numeric(df[vlon], errors="coerce")
     if vlat and vlon:
         for _, row in df.iterrows():
-            if pd.notna(row.get(vlat)) and pd.notna(row.get(vlon)):
-                rate = row.get("SP&A Aligned P mapping", "")
-                dist = row.get("Distance", 0)
-                pc = row.get("Pincode", "")
-                hub_name = row.get(nm, "")
-                dist_str = f"{dist:.1f} km" if pd.notna(dist) and dist > 0 else "N/A"
-                label_html = (
-                    f'<div style="font-size:11px;font-weight:bold;background:white;padding:4px 7px;'
-                    f'border:2px solid #0B8A7A;border-radius:5px;white-space:nowrap;'
-                    f'box-shadow:0 2px 6px rgba(0,0,0,0.15);line-height:1.4;">'
-                    f'<span style="color:#333;">{pc}</span><br>'
-                    f'<span style="color:#0B8A7A;font-size:12px;">{rate}</span> '
-                    f'<span style="color:#666;font-size:10px;">({dist_str})</span>'
-                    f'</div>'
-                )
-                popup_html = (
-                    f"<b>Pincode:</b> {pc}<br>"
-                    f"<b>Hub:</b> {hub_name}<br>"
-                    f"<b>Distance:</b> {dist_str}<br>"
-                    f"<b>Payout Rate:</b> {rate}"
-                )
-                folium.Marker(
-                    location=[row[vlat], row[vlon]],
-                    popup=folium.Popup(popup_html, max_width=250),
-                    tooltip=f"{pc}: {rate} ({dist_str})",
-                    icon=folium.DivIcon(
-                        html=label_html,
-                        icon_size=(120, 40), icon_anchor=(60, 20)),
-                ).add_to(m)
+            # Skip rows where coordinates or distance is NaN
+            if not (pd.notna(row.get(vlat)) and pd.notna(row.get(vlon)) and pd.notna(row.get("Distance"))):
+                continue
+            rate = row.get("SP&A Aligned P mapping", "")
+            dist = row.get("Distance", 0)
+            pc = row.get("Pincode", "")
+            hub_name = row.get(nm, "")
+            dist_str = f"{dist:.1f} km" if pd.notna(dist) and dist > 0 else "N/A"
+            label_html = (
+                f'<div style="font-size:11px;font-weight:bold;background:white;padding:4px 7px;'
+                f'border:2px solid #0B8A7A;border-radius:5px;white-space:nowrap;'
+                f'box-shadow:0 2px 6px rgba(0,0,0,0.15);line-height:1.4;">'
+                f'<span style="color:#333;">{pc}</span><br>'
+                f'<span style="color:#0B8A7A;font-size:12px;">{rate}</span> '
+                f'<span style="color:#666;font-size:10px;">({dist_str})</span>'
+                f'</div>'
+            )
+            popup_html = (
+                f"<b>Pincode:</b> {pc}<br>"
+                f"<b>Hub:</b> {hub_name}<br>"
+                f"<b>Distance:</b> {dist_str}<br>"
+                f"<b>Payout Rate:</b> {rate}"
+            )
+            folium.Marker(
+                location=[float(row[vlat]), float(row[vlon])],
+                popup=folium.Popup(popup_html, max_width=250),
+                tooltip=f"{pc}: {rate} ({dist_str})",
+                icon=folium.DivIcon(
+                    html=label_html,
+                    icon_size=(120, 40), icon_anchor=(60, 20)),
+            ).add_to(m)
 
-                # Draw route from hub to volumetric center via OSRM
-                h_lat = row.get(lc)
-                h_lon = row.get(nc)
-                if pd.notna(h_lat) and pd.notna(h_lon):
-                    route_coords, route_dist_km = _get_osrm_route(
-                        h_lat, h_lon, row[vlat], row[vlon]
-                    )
-                    if route_coords is not None:
-                        route_tooltip = f"Route: {route_dist_km:.1f} km"
-                        folium.PolyLine(
-                            locations=route_coords,
-                            color="#0B8A7A", weight=2.5, opacity=0.7,
-                            tooltip=route_tooltip,
-                        ).add_to(m)
-                    else:
-                        # Fallback: straight dashed line
-                        folium.PolyLine(
-                            locations=[[h_lat, h_lon], [row[vlat], row[vlon]]],
-                            color="#0B8A7A", weight=1.5, opacity=0.5, dash_array="6",
-                        ).add_to(m)
+            # Draw route from hub to volumetric center via OSRM
+            h_lat = row.get(lc)
+            h_lon = row.get(nc)
+            if pd.notna(h_lat) and pd.notna(h_lon):
+                route_coords, route_dist_km = _get_osrm_route(
+                    float(h_lat), float(h_lon), float(row[vlat]), float(row[vlon])
+                )
+                if route_coords is not None:
+                    folium.PolyLine(
+                        locations=route_coords,
+                        color="#0B8A7A", weight=2.5, opacity=0.7,
+                        tooltip=f"Route: {route_dist_km:.1f} km",
+                    ).add_to(m)
+                else:
+                    folium.PolyLine(
+                        locations=[[float(h_lat), float(h_lon)], [float(row[vlat]), float(row[vlon])]],
+                        color="#0B8A7A", weight=1.5, opacity=0.5, dash_array="6",
+                    ).add_to(m)
 
     # Map tools
     MeasureControl(

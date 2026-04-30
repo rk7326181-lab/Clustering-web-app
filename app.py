@@ -1067,13 +1067,10 @@ elif nav.startswith("2"):
 
         st.markdown('<div class="sfx-header">Results</div>', unsafe_allow_html=True)
         import base64 as _b64
-        _cols_b64 = _b64.b64encode("\t".join(dfo.columns.tolist()).encode()).decode()
-        _csv_b64 = _b64.b64encode(dfo.to_csv(index=False).encode()).decode()
-        st.markdown(f"""<div style="display:flex;gap:8px;margin:4px 0 8px">
-<button onclick="navigator.clipboard.writeText(atob('{_cols_b64}')).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy Column Names',2000)}}).catch(()=>{{this.textContent='Failed'}})"
- style="padding:5px 14px;background:#0B8A7A;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">Copy Column Names</button>
-<button onclick="navigator.clipboard.writeText(atob('{_csv_b64}')).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy Whole Table',2000)}}).catch(()=>{{this.textContent='Failed'}})"
- style="padding:5px 14px;background:#1A6B3A;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">Copy Whole Table</button>
+        _csv_b64 = _b64.b64encode(dfo.to_csv(index=False, sep="\t").encode()).decode()
+        st.markdown(f"""<div style="margin:4px 0 8px">
+<button onclick="navigator.clipboard.writeText(atob('{_csv_b64}')).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}}).catch(()=>{{this.textContent='Failed'}})"
+ style="padding:5px 18px;background:#0B8A7A;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">Copy</button>
 </div>""", unsafe_allow_html=True)
         st.data_editor(dfo, use_container_width=True, height=300, key="osrm_edit")
         st.download_button("Download final_output.csv", get_download_bytes(fo, "csv"), "final_output.csv", "text/csv", key="dl_fo")
@@ -1104,13 +1101,14 @@ elif nav.startswith("2"):
                 Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)
             if m:
                 map_out_s2 = st_folium(m, width=None, height=550)
-                # Click-to-inspect
                 if map_out_s2 and map_out_s2.get("last_clicked"):
                     click_lat = map_out_s2["last_clicked"]["lat"]
                     click_lon = map_out_s2["last_clicked"]["lng"]
                     st.markdown(f'<div class="sfx-card"><b>Clicked:</b> {click_lat:.6f}, {click_lon:.6f}</div>', unsafe_allow_html=True)
         except ImportError:
             st.info("Install folium + streamlit-folium for maps.")
+        except Exception as _map_err:
+            st.error(f"Map error: {_map_err}")
 
 # ═══════════════════════════════════════════════════════
 # STEP 3 — POLYGON GENERATION + EDITOR
