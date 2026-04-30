@@ -12,11 +12,93 @@ from shapely.wkt import loads as wkt_loads
 try:
     import folium
     from folium.plugins import HeatMap, Fullscreen, MeasureControl, Draw
+    from branca.element import MacroElement
+    from jinja2 import Template
     HAS_FOLIUM = True
 except ImportError:
     HAS_FOLIUM = False
+    MacroElement = object
+    Template = None
 
 from utils import DESCRIPTION_MAPPING, get_hub_color_map
+
+
+class OsrmRouteDistanceTool(MacroElement):
+    """Interactive route-distance tool — clicks on the map query OSRM for real road distance."""
+    _template = Template("""
+    {% macro script(this, kwargs) %}
+    (function(){
+        var mapObj = {{ this._parent.get_name() }};
+        var RouteDistControl = L.Control.extend({
+            options: { position: 'topleft' },
+            onAdd: function(map) {
+                var container = L.DomUtil.create('div','leaflet-bar leaflet-control');
+                var btn = L.DomUtil.create('a','',container);
+                btn.innerHTML = '&#128207;';
+                btn.title = 'Route Distance Tool  (click points → get road distance, ESC to clear)';
+                btn.href = '#';
+                btn.style.cssText = 'font-size:16px;line-height:30px;text-align:center;display:block;width:30px;height:30px;text-decoration:none;';
+                L.DomEvent.disableClickPropagation(container);
+                var active=false, points=[], layers=[], totalDist=0;
+                function clearAll(){
+                    layers.forEach(function(l){map.removeLayer(l);}); layers=[];
+                    points=[]; totalDist=0; active=false;
+                    btn.style.backgroundColor=''; btn.style.color='';
+                    map.getContainer().style.cursor='';
+                }
+                function showInfo(){
+                    if(points.length<2) return;
+                    var last=points[points.length-1];
+                    var lbl=L.marker(last,{icon:L.divIcon({className:'',
+                        html:'<div style="background:#fff;border:2px solid #0B8A7A;border-radius:5px;padding:4px 10px;font-size:12px;font-weight:700;white-space:nowrap;color:#0B8A7A;box-shadow:0 2px 6px rgba(0,0,0,.2)">&#128739; '+totalDist.toFixed(2)+' km</div>',
+                        iconAnchor:[-8,12]})}).addTo(map);
+                    layers.push(lbl);
+                }
+                btn.onclick=function(e){
+                    L.DomEvent.preventDefault(e);
+                    if(active){clearAll();}else{
+                        active=true;
+                        btn.style.backgroundColor='#0B8A7A'; btn.style.color='#fff';
+                        map.getContainer().style.cursor='crosshair';
+                    }
+                };
+                map.on('click',function(e){
+                    if(!active) return;
+                    var pt=[e.latlng.lat,e.latlng.lng]; points.push(pt);
+                    var dot=L.circleMarker(pt,{radius:5,color:'#0B8A7A',fillColor:'#0B8A7A',fillOpacity:1,weight:2}).addTo(map);
+                    layers.push(dot);
+                    if(points.length>1){
+                        var prev=points[points.length-2], curr=pt;
+                        var url='https://router.project-osrm.org/route/v1/driving/'+prev[1]+','+prev[0]+';'+curr[1]+','+curr[0]+'?overview=full&geometries=geojson';
+                        fetch(url,{signal:AbortSignal.timeout(8000)})
+                            .then(function(r){return r.json();})
+                            .then(function(d){
+                                if(d.code==='Ok'&&d.routes&&d.routes.length){
+                                    var coords=d.routes[0].geometry.coordinates.map(function(c){return[c[1],c[0]];});
+                                    totalDist+=d.routes[0].distance/1000;
+                                    layers.push(L.polyline(coords,{color:'#0B8A7A',weight:3,opacity:0.85}).addTo(map));
+                                } else {
+                                    totalDist+=map.distance(L.latLng(prev),L.latLng(curr))/1000;
+                                    layers.push(L.polyline([prev,curr],{color:'#ef4444',weight:2,dashArray:'6',opacity:0.7}).addTo(map));
+                                }
+                                showInfo();
+                            })
+                            .catch(function(){
+                                totalDist+=map.distance(L.latLng(prev),L.latLng(curr))/1000;
+                                layers.push(L.polyline([prev,curr],{color:'#ef4444',weight:2,dashArray:'6',opacity:0.7}).addTo(map));
+                                showInfo();
+                            });
+                    }
+                });
+                document.addEventListener('keydown',function(e){if(e.key==='Escape')clearAll();});
+                return container;
+            }
+        });
+        new RouteDistControl().addTo(mapObj);
+    })();
+    {% endmacro %}
+    """) if Template else None
+
 
 # Distinct pincode colors — 30 colors to cycle through within each hub
 _PINCODE_PALETTE = [
@@ -454,7 +536,7 @@ def _get_osrm_route(hub_lat, hub_lon, vol_lat, vol_lon):
         return None, None
 
 
-def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_filter=None, rate_filter=None):
+def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_filter=None, rate_filter=None, vlat_col=None, vlon_col=None):
     if not HAS_FOLIUM: return None
     df = final_output_df.copy(); df.columns = df.columns.str.strip()
     lc = "Hub_lat" if "Hub_lat" in df.columns else "hub_lat"
@@ -528,8 +610,17 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
                           icon=folium.Icon(color="red", icon="home", prefix="fa")).add_to(m)
 
     # Volumetric point labels — show distance (km) + payout rate
-    vlat = next((c for c in ["Volumetric Lat", "volumetric_lat", "vol_lat"] if c in df.columns), None)
-    vlon = next((c for c in ["Volumetric Long", "volumetric_long", "vol_long"] if c in df.columns), None)
+    # Use caller-supplied column names first, then fall back to common name patterns
+    _vlat_candidates = ["Volumetric Lat", "volumetric_lat", "vol_lat", "Lat", "lat", "latitude", "Latitude"]
+    _vlon_candidates = ["Volumetric Long", "volumetric_long", "vol_long", "Long", "long", "longitude", "Longitude"]
+    if vlat_col and vlat_col in df.columns:
+        vlat = vlat_col
+    else:
+        vlat = next((c for c in _vlat_candidates if c in df.columns), None)
+    if vlon_col and vlon_col in df.columns:
+        vlon = vlon_col
+    else:
+        vlon = next((c for c in _vlon_candidates if c in df.columns), None)
     if vlat:
         df[vlat] = pd.to_numeric(df[vlat], errors="coerce")
     if vlon:
@@ -594,6 +685,8 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
         secondary_length_unit="meters",
         primary_area_unit="sqkilometers",
     ).add_to(m)
+    if OsrmRouteDistanceTool._template is not None:
+        OsrmRouteDistanceTool().add_to(m)
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
     _add_surge_legend(m)

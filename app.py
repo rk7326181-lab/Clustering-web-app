@@ -1066,10 +1066,11 @@ elif nav.startswith("2"):
             </div>''', unsafe_allow_html=True)
 
         st.markdown('<div class="sfx-header">Results</div>', unsafe_allow_html=True)
-        import base64 as _b64
-        _csv_b64 = _b64.b64encode(dfo.to_csv(index=False, sep="\t").encode()).decode()
+        import html as _html
+        _tsv_escaped = _html.escape(dfo.to_csv(index=False, sep="\t"))
         st.markdown(f"""<div style="margin:4px 0 8px">
-<button onclick="navigator.clipboard.writeText(atob('{_csv_b64}')).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}}).catch(()=>{{this.textContent='Failed'}})"
+<textarea id="pm_copy_ta" style="position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0">{_tsv_escaped}</textarea>
+<button onclick="var ta=document.getElementById('pm_copy_ta');ta.style.display='block';ta.select();if(navigator.clipboard){{navigator.clipboard.writeText(ta.value).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}}).catch(()=>{{document.execCommand('copy');this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}})}}else{{document.execCommand('copy');this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}}ta.style.display='none';"
  style="padding:5px 18px;background:#0B8A7A;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">Copy</button>
 </div>""", unsafe_allow_html=True)
         st.data_editor(dfo, use_container_width=True, height=300, key="osrm_edit")
@@ -1095,7 +1096,8 @@ elif nav.startswith("2"):
             import folium
             from streamlit_folium import st_folium
             from modules.visualizer import create_osrm_map
-            m = create_osrm_map(fo, st.session_state.get("geojson_data"), satellite=False, hub_filter=hub_filter, rate_filter=s2_rate_filter)
+            m = create_osrm_map(fo, st.session_state.get("geojson_data"), satellite=False, hub_filter=hub_filter, rate_filter=s2_rate_filter,
+                                vlat_col=st.session_state.get("vol_lat_col"), vlon_col=st.session_state.get("vol_long_col"))
             if edit_mode_s2:
                 from folium.plugins import Draw
                 Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)
