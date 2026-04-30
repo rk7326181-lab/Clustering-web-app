@@ -359,9 +359,13 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
             cdf = cdf[cdf[nm] == hub_filter]
         hubs = cdf.drop_duplicates(subset=[nm])
         for _, h in hubs.iterrows():
+            if not (pd.notna(h.get(lc)) and pd.notna(h.get(nc2))):
+                continue
             folium.Marker(
-                location=[h[lc], h[nc2]], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
-                icon=folium.Icon(color="red", icon="home", prefix="fa"),
+                location=[float(h[lc]), float(h[nc2])], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
+                icon=folium.DivIcon(
+                    html=f'<div title="{h[nm]}" style="background:#e74c3c;color:#fff;border:3px solid #fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);font-weight:700;line-height:30px;text-align:center;">&#127968;</div>',
+                    icon_size=(30, 30), icon_anchor=(15, 15)),
             ).add_to(m)
 
     # Shipment heatmap
@@ -397,6 +401,8 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
         secondary_length_unit="meters",
         primary_area_unit="sqkilometers",
     ).add_to(m)
+    if OsrmRouteDistanceTool._template is not None:
+        OsrmRouteDistanceTool().add_to(m)
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
     _add_surge_legend(m)
@@ -508,6 +514,15 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
     # The FG must live on the map so its JS variable is defined; Draw(feature_group=fg)
     # then uses it as drawnItems, making existing polygons editable/deletable.
     fg.add_to(m)
+    MeasureControl(
+        position="topleft",
+        primary_length_unit="kilometers",
+        secondary_length_unit="meters",
+        primary_area_unit="sqkilometers",
+    ).add_to(m)
+    if OsrmRouteDistanceTool._template is not None:
+        OsrmRouteDistanceTool().add_to(m)
+    folium.LayerControl(position="topright", collapsed=False).add_to(m)
     return m, fg
 
 
@@ -606,8 +621,12 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
     hubs = df.drop_duplicates(subset=[nm])
     for _, h in hubs.iterrows():
         if pd.notna(h.get(lc)) and pd.notna(h.get(nc)):
-            folium.Marker(location=[float(h[lc]), float(h[nc])], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
-                          icon=folium.Icon(color="red", icon="home", prefix="fa")).add_to(m)
+            folium.Marker(
+                location=[float(h[lc]), float(h[nc])], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
+                icon=folium.DivIcon(
+                    html=f'<div title="{h[nm]}" style="background:#e74c3c;color:#fff;border:3px solid #fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);font-weight:700;line-height:30px;text-align:center;">&#127968;</div>',
+                    icon_size=(30, 30), icon_anchor=(15, 15)),
+            ).add_to(m)
 
     # Volumetric point labels — show distance (km) + payout rate
     # Use caller-supplied column names first, then fall back to common name patterns
@@ -671,6 +690,20 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
                         locations=route_coords,
                         color="#0B8A7A", weight=2.5, opacity=0.7,
                         tooltip=f"Route: {route_dist_km:.1f} km",
+                    ).add_to(m)
+                    # Distance label at route midpoint
+                    mid_idx = len(route_coords) // 2
+                    mid_pt = route_coords[mid_idx]
+                    folium.Marker(
+                        location=mid_pt,
+                        icon=folium.DivIcon(
+                            html=(
+                                f'<div style="background:rgba(255,255,255,0.92);border:2px solid #0B8A7A;'
+                                f'border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;'
+                                f'color:#0B8A7A;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.2);">'
+                                f'{route_dist_km:.1f} km</div>'
+                            ),
+                            icon_size=(70, 22), icon_anchor=(35, 11)),
                     ).add_to(m)
                 else:
                     folium.PolyLine(

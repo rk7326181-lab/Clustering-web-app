@@ -281,6 +281,7 @@ from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
                    detect_latlon_cols, detect_geojson_pincode_field,
                    haversine_km, get_pricing, get_hub_color_map,
                    CLUSTER_MAP, DESCRIPTION_MAPPING, HUB_COLORS, PRICING_SLABS,
+                   PCAT_SOP, RATE_TO_PCAT, rate_to_pcat,
                    OUTPUT_DIR, HUB_IMG_DIR)
 
 init_session_state()
@@ -713,7 +714,7 @@ if st.session_state.get("auto_run_requested"):
                     merged.loc[valid, "Distance"] = haversine_km_vectorized(
                         hl[valid].values, ho[valid].values, vl_col[valid].values, vo_col[valid].values
                     )
-                merged["SP&A Aligned P mapping"] = get_pricing_vectorized(merged["Distance"])
+                merged["SP&A Aligned P mapping"] = pd.Series(get_pricing_vectorized(merged["Distance"])).map(rate_to_pcat).values
                 out_cols = ["Pincode", "Hub_Name", "Hub_lat", "Hub_long", vlat, vlon, "Distance", "SP&A Aligned P mapping"]
                 final = merged[[c for c in out_cols if c in merged.columns]].copy()
                 st.session_state["final_output_df"] = final
@@ -1039,7 +1040,7 @@ elif nav.startswith("2"):
                     hl[valid].values, ho[valid].values, vl[valid].values, vo_col[valid].values
                 )
             prog.progress(0.8)
-        merged["SP&A Aligned P mapping"] = get_pricing_vectorized(merged["Distance"])
+        merged["SP&A Aligned P mapping"] = pd.Series(get_pricing_vectorized(merged["Distance"])).map(rate_to_pcat).values
         out_cols = ["Pincode", "Hub_Name", "Hub_lat", "Hub_long", vlat, vlon, "Distance", "SP&A Aligned P mapping"]
         final = merged[[c for c in out_cols if c in merged.columns]].copy()
         st.session_state["final_output_df"] = final; final.to_csv(os.path.join(OUTPUT_DIR, "final_output.csv"), index=False); prog.empty()
@@ -1083,23 +1084,7 @@ elif nav.startswith("2"):
                 with _rcols[_i % len(_rcols)]:
                     st.metric(_r, _c)
 
-        # ═══ P Category Switch ═══════════════════════════════
-        _SOP = {
-            "P1":  (0,    0),   "P2":  (1,    100),  "P3":  (2,    120),
-            "P4":  (4,    200), "P5":  (6,    240),  "P6":  (8,    320),
-            "P7":  (9,    360), "P8":  (10,   400),  "P9":  (10,   400),
-            "P10": (10,   400),
-            **{f"P{i}": (i, 400) for i in range(11, 31)},
-            "P31": (0.5,  100), "P32": (1.5,  100),  "P33": (2.5,  120),
-            "P34": (3,    150), "P35": (3.5,  200),  "P36": (4.5,  200),
-            "P37": (5,    220), "P38": (5.5,  240),  "P39": (6.5,  240),
-            "P40": (7,    300), "P41": (7.5,  320),
-        }
-        _RATE_TO_P = {
-            "₹0": "P1", "₹1": "P2", "₹2": "P3",  "₹3": "P34",
-            "₹4": "P4", "₹5": "P37","₹6": "P5",  "₹7": "P40",
-            "₹8": "P6", "Nil": "P1",
-        }
+        # ═══ P Category Switch (inline in Results) ═══════════
         if "pmapping_overrides" not in st.session_state:
             st.session_state["pmapping_overrides"] = {}
         _ov = st.session_state["pmapping_overrides"]
@@ -1108,26 +1093,24 @@ elif nav.startswith("2"):
             pin = str(row.get("Pincode", "")).strip()
             if pin in _ov:
                 return _ov[pin]
-            return _RATE_TO_P.get(str(row.get("SP&A Aligned P mapping", "")), "P1")
+            return str(row.get("SP&A Aligned P mapping", "P1"))
 
         _pdf = dfo.copy()
         _pdf["P_Category"]     = _pdf.apply(_get_pcat, axis=1)
-        _pdf["Payout (₹/km)"]  = _pdf["P_Category"].map(lambda p: _SOP.get(p, (0, 0))[0])
-        _pdf["Amount Capping"] = _pdf["P_Category"].map(lambda p: _SOP.get(p, (0, 0))[1])
+        _pdf["Payout (₹/km)"]  = _pdf["P_Category"].map(lambda p: PCAT_SOP.get(p, (0, 0))[0])
+        _pdf["Amount Capping"] = _pdf["P_Category"].map(lambda p: PCAT_SOP.get(p, (0, 0))[1])
 
-        st.markdown('<div class="sfx-header">P Category Switch</div>', unsafe_allow_html=True)
-
-        with st.expander("Switch P Category for Pincodes", expanded=True):
+        with st.expander("Switch P Category for Pincodes", expanded=False):
             _sw1, _sw2, _sw3 = st.columns([3, 2, 1])
             with _sw1:
                 _pin_opts = sorted(_pdf["Pincode"].astype(str).str.strip().unique().tolist())
                 _pins_sel = st.multiselect("Select Pincodes", options=_pin_opts, key="sw_pincodes")
             with _sw2:
-                _pcat_opts = sorted(_SOP.keys(), key=lambda x: int(x[1:]))
+                _pcat_opts = sorted(PCAT_SOP.keys(), key=lambda x: int(x[1:]))
                 _new_pcat  = st.selectbox(
                     "New P Category",
                     options=_pcat_opts,
-                    format_func=lambda p: f"{p}  (₹{_SOP[p][0]}/km · cap ₹{_SOP[p][1]})",
+                    format_func=lambda p: f"{p}  (₹{PCAT_SOP[p][0]}/km · cap ₹{PCAT_SOP[p][1]})",
                     key="sw_new_pcat"
                 )
             with _sw3:
@@ -1144,8 +1127,8 @@ elif nav.startswith("2"):
             if _ov:
                 _ov_df = pd.DataFrame([
                     {"Pincode": k, "P_Category": v,
-                     "Payout (₹/km)": _SOP.get(v,(0,0))[0],
-                     "Amount Capping": _SOP.get(v,(0,0))[1]}
+                     "Payout (₹/km)": PCAT_SOP.get(v,(0,0))[0],
+                     "Amount Capping": PCAT_SOP.get(v,(0,0))[1]}
                     for k, v in _ov.items()
                 ])
                 st.caption(f"{len(_ov)} override(s) active")
@@ -1165,7 +1148,7 @@ elif nav.startswith("2"):
         with _s2mc1:
             edit_mode_s2 = st.toggle("Edit Mode", key="s2_edit_mode", value=False)
         with _s2mc2:
-            s2_rate_filter = st.selectbox("Rate Filter", ["All"] + [f"₹{i}" for i in range(0, 9)] + ["Nil"], key="s2_map_rate")
+            s2_rate_filter = st.selectbox("P-Category Filter", ["All"] + sorted(PCAT_SOP.keys(), key=lambda x: int(x[1:])) + ["Nil"], key="s2_map_rate")
         if edit_mode_s2:
             st.info("Edit Mode ON — draw polygons on the map, click existing polygons to edit.")
         try:
@@ -2258,9 +2241,12 @@ elif nav.startswith("5"):
             # Add fullscreen + measure controls + layer control
             try:
                 from folium.plugins import Fullscreen, MeasureControl
+                from modules.visualizer import OsrmRouteDistanceTool
                 Fullscreen(position="topright", title="Full Screen",
                            title_cancel="Exit Full Screen", force_separate_button=True).add_to(map_obj)
                 MeasureControl(position="topleft", primary_length_unit="kilometers").add_to(map_obj)
+                if OsrmRouteDistanceTool._template is not None:
+                    OsrmRouteDistanceTool().add_to(map_obj)
                 # Add tile layers for satellite/terrain switching
                 import folium as fol
                 fol.TileLayer(

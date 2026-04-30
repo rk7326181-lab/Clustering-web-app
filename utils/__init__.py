@@ -34,6 +34,30 @@ PRICING_SLABS = [
     (40, 45, "₹8"),
 ]
 
+# SOP: P-category → (payout_rate, amount_capping)
+PCAT_SOP = {
+    "P1":  (0,    0),   "P2":  (1,    100),  "P3":  (2,    120),
+    "P4":  (4,    200), "P5":  (6,    240),  "P6":  (8,    320),
+    "P7":  (9,    360), "P8":  (10,   400),  "P9":  (10,   400),
+    "P10": (10,   400),
+    **{f"P{i}": (i, 400) for i in range(11, 31)},
+    "P31": (0.5,  100), "P32": (1.5,  100),  "P33": (2.5,  120),
+    "P34": (3,    150), "P35": (3.5,  200),  "P36": (4.5,  200),
+    "P37": (5,    220), "P38": (5.5,  240),  "P39": (6.5,  240),
+    "P40": (7,    300), "P41": (7.5,  320),
+}
+
+# Default distance-band → P-category (matches PRICING_SLABS bands)
+RATE_TO_PCAT = {
+    "₹0": "P1", "₹1": "P2", "₹2": "P3",  "₹3": "P34",
+    "₹4": "P4", "₹5": "P37","₹6": "P5",  "₹7": "P40",
+    "₹8": "P6", "Nil": "Nil",
+}
+
+def rate_to_pcat(rate_str):
+    """Convert a ₹-rate string to its default P-category."""
+    return RATE_TO_PCAT.get(str(rate_str), str(rate_str))
+
 FALLBACK_PINCODE_MAP = {
     580011: "C4", 203209: "C8", 282009: "C6",
     584128: "C2", 110074: "C2", 800001: "C0",
