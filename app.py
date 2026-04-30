@@ -1078,10 +1078,86 @@ elif nav.startswith("2"):
 
         if "SP&A Aligned P mapping" in fo.columns:
             dc = fo["SP&A Aligned P mapping"].value_counts().sort_index()
-            cols = st.columns(min(len(dc), 6))
-            for i, (r, c) in enumerate(dc.items()):
-                with cols[i % len(cols)]:
-                    st.metric(r, c)
+            _rcols = st.columns(min(len(dc), 8))
+            for _i, (_r, _c) in enumerate(dc.items()):
+                with _rcols[_i % len(_rcols)]:
+                    st.metric(_r, _c)
+
+        # ═══ P Category Switch ═══════════════════════════════
+        _SOP = {
+            "P1":  (0,    0),   "P2":  (1,    100),  "P3":  (2,    120),
+            "P4":  (4,    200), "P5":  (6,    240),  "P6":  (8,    320),
+            "P7":  (9,    360), "P8":  (10,   400),  "P9":  (10,   400),
+            "P10": (10,   400),
+            **{f"P{i}": (i, 400) for i in range(11, 31)},
+            "P31": (0.5,  100), "P32": (1.5,  100),  "P33": (2.5,  120),
+            "P34": (3,    150), "P35": (3.5,  200),  "P36": (4.5,  200),
+            "P37": (5,    220), "P38": (5.5,  240),  "P39": (6.5,  240),
+            "P40": (7,    300), "P41": (7.5,  320),
+        }
+        _RATE_TO_P = {
+            "₹0": "P1", "₹1": "P2", "₹2": "P3",  "₹3": "P34",
+            "₹4": "P4", "₹5": "P37","₹6": "P5",  "₹7": "P40",
+            "₹8": "P6", "Nil": "P1",
+        }
+        if "pmapping_overrides" not in st.session_state:
+            st.session_state["pmapping_overrides"] = {}
+        _ov = st.session_state["pmapping_overrides"]
+
+        def _get_pcat(row):
+            pin = str(row.get("Pincode", "")).strip()
+            if pin in _ov:
+                return _ov[pin]
+            return _RATE_TO_P.get(str(row.get("SP&A Aligned P mapping", "")), "P1")
+
+        _pdf = dfo.copy()
+        _pdf["P_Category"]     = _pdf.apply(_get_pcat, axis=1)
+        _pdf["Payout (₹/km)"]  = _pdf["P_Category"].map(lambda p: _SOP.get(p, (0, 0))[0])
+        _pdf["Amount Capping"] = _pdf["P_Category"].map(lambda p: _SOP.get(p, (0, 0))[1])
+
+        st.markdown('<div class="sfx-header">P Category Switch</div>', unsafe_allow_html=True)
+
+        with st.expander("Switch P Category for Pincodes", expanded=True):
+            _sw1, _sw2, _sw3 = st.columns([3, 2, 1])
+            with _sw1:
+                _pin_opts = sorted(_pdf["Pincode"].astype(str).str.strip().unique().tolist())
+                _pins_sel = st.multiselect("Select Pincodes", options=_pin_opts, key="sw_pincodes")
+            with _sw2:
+                _pcat_opts = sorted(_SOP.keys(), key=lambda x: int(x[1:]))
+                _new_pcat  = st.selectbox(
+                    "New P Category",
+                    options=_pcat_opts,
+                    format_func=lambda p: f"{p}  (₹{_SOP[p][0]}/km · cap ₹{_SOP[p][1]})",
+                    key="sw_new_pcat"
+                )
+            with _sw3:
+                st.write(""); st.write("")
+                if st.button("Switch", type="primary", key="do_switch"):
+                    if _pins_sel:
+                        for _p in _pins_sel:
+                            st.session_state["pmapping_overrides"][_p] = _new_pcat
+                        st.success(f"Switched {len(_pins_sel)} pincode(s) → {_new_pcat}")
+                        st.rerun()
+                    else:
+                        st.warning("Select at least one pincode.")
+
+            if _ov:
+                _ov_df = pd.DataFrame([
+                    {"Pincode": k, "P_Category": v,
+                     "Payout (₹/km)": _SOP.get(v,(0,0))[0],
+                     "Amount Capping": _SOP.get(v,(0,0))[1]}
+                    for k, v in _ov.items()
+                ])
+                st.caption(f"{len(_ov)} override(s) active")
+                st.dataframe(_ov_df, use_container_width=True, height=min(160, 40 + len(_ov_df)*35))
+                if st.button("Clear All Switches", key="clear_switches"):
+                    st.session_state["pmapping_overrides"] = {}
+                    st.rerun()
+
+        _show_cols = [c for c in ["Pincode","Hub_Name","Distance","SP&A Aligned P mapping","P_Category","Payout (₹/km)","Amount Capping"] if c in _pdf.columns]
+        st.dataframe(_pdf[_show_cols], use_container_width=True, height=280)
+        st.download_button("Download with P Categories", get_download_bytes(_pdf, "csv"),
+                           "final_output_with_pcategory.csv", "text/csv", key="dl_fo_pcat")
 
         st.markdown('<div class="sfx-header">Map</div>', unsafe_allow_html=True)
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
