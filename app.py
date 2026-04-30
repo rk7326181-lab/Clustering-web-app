@@ -1066,6 +1066,15 @@ elif nav.startswith("2"):
             </div>''', unsafe_allow_html=True)
 
         st.markdown('<div class="sfx-header">Results</div>', unsafe_allow_html=True)
+        import base64 as _b64
+        _cols_b64 = _b64.b64encode("\t".join(dfo.columns.tolist()).encode()).decode()
+        _csv_b64 = _b64.b64encode(dfo.to_csv(index=False).encode()).decode()
+        st.markdown(f"""<div style="display:flex;gap:8px;margin:4px 0 8px">
+<button onclick="navigator.clipboard.writeText(atob('{_cols_b64}')).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy Column Names',2000)}}).catch(()=>{{this.textContent='Failed'}})"
+ style="padding:5px 14px;background:#0B8A7A;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">Copy Column Names</button>
+<button onclick="navigator.clipboard.writeText(atob('{_csv_b64}')).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy Whole Table',2000)}}).catch(()=>{{this.textContent='Failed'}})"
+ style="padding:5px 14px;background:#1A6B3A;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">Copy Whole Table</button>
+</div>""", unsafe_allow_html=True)
         st.data_editor(dfo, use_container_width=True, height=300, key="osrm_edit")
         st.download_button("Download final_output.csv", get_download_bytes(fo, "csv"), "final_output.csv", "text/csv", key="dl_fo")
 

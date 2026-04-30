@@ -468,8 +468,16 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
     if rate_filter and rate_filter != "All" and "SP&A Aligned P mapping" in df.columns:
         df = df[df["SP&A Aligned P mapping"].astype(str) == rate_filter]
 
-    center_lat = df[lc].mean() if lc in df.columns else 26.8
-    center_lon = df[nc].mean() if nc in df.columns else 92.7
+    # Ensure coordinate columns are numeric to avoid string-dtype mean() error
+    if lc in df.columns:
+        df[lc] = pd.to_numeric(df[lc], errors="coerce")
+    if nc in df.columns:
+        df[nc] = pd.to_numeric(df[nc], errors="coerce")
+
+    _lat_mean = df[lc].mean() if lc in df.columns else float("nan")
+    _lon_mean = df[nc].mean() if nc in df.columns else float("nan")
+    center_lat = _lat_mean if pd.notna(_lat_mean) else 26.8
+    center_lon = _lon_mean if pd.notna(_lon_mean) else 92.7
     m = _base_map(center_lat, center_lon, zoom=8 if hub_filter in (None, "All Hubs") else 10, satellite=satellite)
 
     # GeoJSON boundaries
@@ -521,6 +529,10 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
     # Volumetric point labels — show distance (km) + payout rate
     vlat = next((c for c in ["Volumetric Lat", "volumetric_lat", "vol_lat"] if c in df.columns), None)
     vlon = next((c for c in ["Volumetric Long", "volumetric_long", "vol_long"] if c in df.columns), None)
+    if vlat:
+        df[vlat] = pd.to_numeric(df[vlat], errors="coerce")
+    if vlon:
+        df[vlon] = pd.to_numeric(df[vlon], errors="coerce")
     if vlat and vlon:
         for _, row in df.iterrows():
             if pd.notna(row.get(vlat)) and pd.notna(row.get(vlon)):
