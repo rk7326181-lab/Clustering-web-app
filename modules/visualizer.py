@@ -62,9 +62,9 @@ class OsrmRouteDistanceTool(MacroElement):
                         map.getContainer().style.cursor='crosshair';
                     }
                 };
-                map.on('click',function(e){
+                function addPoint(lat,lng){
                     if(!active) return;
-                    var pt=[e.latlng.lat,e.latlng.lng]; points.push(pt);
+                    var pt=[lat,lng]; points.push(pt);
                     var dot=L.circleMarker(pt,{radius:5,color:'#0B8A7A',fillColor:'#0B8A7A',fillOpacity:1,weight:2}).addTo(map);
                     layers.push(dot);
                     if(points.length>1){
@@ -89,6 +89,10 @@ class OsrmRouteDistanceTool(MacroElement):
                                 showInfo();
                             });
                     }
+                }
+                window.osrmAddPoint=addPoint;
+                map.on('click',function(e){
+                    addPoint(e.latlng.lat,e.latlng.lng);
                 });
                 document.addEventListener('keydown',function(e){if(e.key==='Escape')clearAll();});
                 return container;
@@ -361,10 +365,17 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
         for _, h in hubs.iterrows():
             if not (pd.notna(h.get(lc)) and pd.notna(h.get(nc2))):
                 continue
+            _hlat, _hlon = float(h[lc]), float(h[nc2])
             folium.Marker(
-                location=[float(h[lc]), float(h[nc2])], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
+                location=[_hlat, _hlon], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
                 icon=folium.DivIcon(
-                    html=f'<div title="{h[nm]}" style="background:#e74c3c;color:#fff;border:3px solid #fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);font-weight:700;line-height:30px;text-align:center;">&#127968;</div>',
+                    html=(
+                        f'<div title="{h[nm]} — click to set as route start"'
+                        f' onclick="if(window.osrmAddPoint){{window.osrmAddPoint({_hlat},{_hlon});return false;}}"'
+                        f' style="cursor:pointer;background:#e74c3c;color:#fff;border:3px solid #fff;border-radius:50%;'
+                        f'width:30px;height:30px;display:flex;align-items:center;justify-content:center;'
+                        f'font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);font-weight:700;line-height:30px;text-align:center;">&#127968;</div>'
+                    ),
                     icon_size=(30, 30), icon_anchor=(15, 15)),
             ).add_to(m)
 
@@ -578,6 +589,8 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
     m = _base_map(center_lat, center_lon, zoom=8 if hub_filter in (None, "All Hubs") else 10, satellite=satellite)
 
     # GeoJSON boundaries
+    pincode_color_map = {}  # populated inside if-block; used by label loop below
+    pincode_field = None
     if geojson_data is not None:
         pcs = set(df["Pincode"].astype(str).str.strip().str.replace(".0", "", regex=False).tolist())
         pincode_field = None
@@ -586,11 +599,11 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
                 if k in f.get("properties", {}):
                     pincode_field = k; break
         if pincode_field:
-            # Color-code boundaries by payout rate
-            rate_fill_colors = {
-                "₹0": "#2ecc71", "₹1": "#3498db", "₹2": "#9b59b6",
-                "₹3": "#e67e22", "₹4": "#e74c3c", "₹5": "#f39c12",
-                "₹6": "#d35400", "₹7": "#c0392b", "₹8": "#8e44ad", "Nil": "#95a5a6",
+            # Per-pincode color map so each pincode in a hub gets a distinct color
+            sorted_pcs = sorted(pcs)
+            pincode_color_map = {
+                pc: _PINCODE_PALETTE[i % len(_PINCODE_PALETTE)]
+                for i, pc in enumerate(sorted_pcs)
             }
             for feature in geojson_data.get("features", []):
                 pc = str(feature.get("properties", {}).get(pincode_field, "")).strip()
@@ -599,7 +612,7 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
                     rate = rate_row["SP&A Aligned P mapping"].iloc[0] if len(rate_row) > 0 else ""
                     dist_val = rate_row["Distance"].iloc[0] if len(rate_row) > 0 and "Distance" in rate_row.columns else 0
                     dist_str = f"{dist_val:.1f} km" if pd.notna(dist_val) and dist_val > 0 else ""
-                    fill_c = rate_fill_colors.get(str(rate), "#3498db")
+                    fill_c = pincode_color_map.get(pc, "#3498db")
                     try:
                         folium.GeoJson(
                             {"type": "Feature", "geometry": feature["geometry"],
@@ -621,10 +634,17 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
     hubs = df.drop_duplicates(subset=[nm])
     for _, h in hubs.iterrows():
         if pd.notna(h.get(lc)) and pd.notna(h.get(nc)):
+            _hlat, _hlon = float(h[lc]), float(h[nc])
             folium.Marker(
-                location=[float(h[lc]), float(h[nc])], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
+                location=[_hlat, _hlon], popup=f"<b>{h[nm]}</b>", tooltip=h[nm],
                 icon=folium.DivIcon(
-                    html=f'<div title="{h[nm]}" style="background:#e74c3c;color:#fff;border:3px solid #fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);font-weight:700;line-height:30px;text-align:center;">&#127968;</div>',
+                    html=(
+                        f'<div title="{h[nm]} — click to set as route start"'
+                        f' onclick="if(window.osrmAddPoint){{window.osrmAddPoint({_hlat},{_hlon});return false;}}"'
+                        f' style="cursor:pointer;background:#e74c3c;color:#fff;border:3px solid #fff;border-radius:50%;'
+                        f'width:30px;height:30px;display:flex;align-items:center;justify-content:center;'
+                        f'font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);font-weight:700;line-height:30px;text-align:center;">&#127968;</div>'
+                    ),
                     icon_size=(30, 30), icon_anchor=(15, 15)),
             ).add_to(m)
 
@@ -654,12 +674,14 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
             pc = row.get("Pincode", "")
             hub_name = row.get(nm, "")
             dist_str = f"{dist:.1f} km" if pd.notna(dist) and dist > 0 else "N/A"
+            pc_str = str(pc).strip().replace(".0", "")
+            pin_color = pincode_color_map.get(pc_str, "#0B8A7A") if geojson_data is not None and pincode_field else "#0B8A7A"
             label_html = (
                 f'<div style="font-size:11px;font-weight:bold;background:white;padding:4px 7px;'
-                f'border:2px solid #0B8A7A;border-radius:5px;white-space:nowrap;'
+                f'border:2px solid {pin_color};border-radius:5px;white-space:nowrap;'
                 f'box-shadow:0 2px 6px rgba(0,0,0,0.15);line-height:1.4;">'
                 f'<span style="color:#333;">{pc}</span><br>'
-                f'<span style="color:#0B8A7A;font-size:12px;">{rate}</span> '
+                f'<span style="color:{pin_color};font-size:12px;">{rate}</span> '
                 f'<span style="color:#666;font-size:10px;">({dist_str})</span>'
                 f'</div>'
             )
