@@ -91,9 +91,30 @@ class OsrmRouteDistanceTool(MacroElement):
                     }
                 }
                 window.osrmAddPoint=addPoint;
-                map.on('click',function(e){
-                    addPoint(e.latlng.lat,e.latlng.lng);
-                });
+                // Deduplicate: layer click + map.on('click') can both fire within ms of each other
+                var _osrmLastMs=0;
+                function addPointOnce(lat,lng){
+                    var now=Date.now(); if(now-_osrmLastMs<80) return; _osrmLastMs=now;
+                    addPoint(lat,lng);
+                }
+                // Register click handler on every layer so clicks on polygons/markers work
+                // even when Folium/Draw plugin stops event propagation to the map
+                function addLayerListener(layer){
+                    if(layer.eachLayer){
+                        // FeatureGroup or LayerGroup — recurse into children
+                        layer.eachLayer(addLayerListener);
+                        layer.on('layeradd',function(ev){addLayerListener(ev.layer);});
+                    } else if(layer.on){
+                        layer.on('click',function(e){
+                            if(!active) return;
+                            addPointOnce(e.latlng.lat,e.latlng.lng);
+                        });
+                    }
+                }
+                map.eachLayer(addLayerListener);
+                map.on('layeradd',function(ev){addLayerListener(ev.layer);});
+                // Fallback: catch clicks on empty map areas that no layer handles
+                map.on('click',function(e){ addPointOnce(e.latlng.lat,e.latlng.lng); });
                 document.addEventListener('keydown',function(e){if(e.key==='Escape')clearAll();});
                 return container;
             }
