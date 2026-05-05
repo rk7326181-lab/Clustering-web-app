@@ -1753,11 +1753,13 @@ elif nav.startswith("3"):
                         gdf_wm = gdf.to_crs(epsg=3857)
                         # Plot polygons — transparent fill with visible outlines
                         gdf_wm.plot(ax=ax, alpha=0.25, color=hcm.get(hn, "#3498db"), edgecolor="black", linewidth=1.5, zorder=2)
-                        # Add payout labels at polygon centroids
+                        # Add payout labels — use representative_point() so labels land inside
+                        # the polygon ring, not at the centroid of the hole (hub location)
                         for idx_p, row_p in gdf_wm.iterrows():
-                            cx, cy = row_p.geometry.centroid.x, row_p.geometry.centroid.y
+                            rep_pt = row_p.geometry.representative_point()
+                            cx, cy = rep_pt.x, rep_pt.y
                             ax.text(cx, cy, row_p["label"], ha="center", va="center", fontsize=9, fontweight="bold",
-                                    bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, boxstyle="round,pad=0.3"), zorder=4)
+                                    bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, boxstyle="round,pad=0.3"), zorder=6)
                         # Plot hub marker (reproject hub point to Web Mercator)
                         hub_gdf = gpd.GeoDataFrame(geometry=[gpd.points_from_xy([hlon], [hlat])[0]], crs="EPSG:4326").to_crs(epsg=3857)
                         hub_x, hub_y = hub_gdf.geometry.iloc[0].x, hub_gdf.geometry.iloc[0].y
