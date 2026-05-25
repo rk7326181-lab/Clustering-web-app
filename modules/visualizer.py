@@ -8,6 +8,7 @@ import requests
 import time
 import streamlit as st
 from shapely.wkt import loads as wkt_loads
+from shapely.geometry import mapping as shapely_mapping
 
 try:
     import folium
@@ -314,7 +315,6 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
             poly = wkt_loads(wkt)
             # Simplify polygon to reduce map HTML size (~100m tolerance)
             poly = poly.simplify(0.001, preserve_topology=True)
-            latlon = [[lat, lon] for lon, lat in poly.exterior.coords]
             cc = row.get("Cluster_Code", "")
             hub = row.get(hub_col, "")
             cat = row.get("Cluster_Category", "")
@@ -342,14 +342,19 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
                 fill_color = hub_color
 
             popup = f"<b>{cc}</b><br>Hub: {hub}<br>Pincode: {pincode}<br>Rate: ₹{rate}<br>Shipments: {ships:,}<br>Price: ₹{price:,.0f}"
-            folium.Polygon(
-                locations=latlon, popup=folium.Popup(popup, max_width=280),
+            # Use GeoJson instead of Polygon so interior rings (holes in donut shapes) are rendered correctly
+            folium.GeoJson(
+                shapely_mapping(poly),
+                style_function=lambda x, fc=fill_color, hc=hub_color: {
+                    "fillColor": fc, "color": hc, "weight": 2.5, "fillOpacity": 0.45,
+                },
+                popup=folium.Popup(popup, max_width=280),
                 tooltip=f"{pincode} | ₹{price:,.0f}" if ships > 0 else f"{pincode} | ₹{rate}",
-                color=hub_color, weight=2.5, fill=True, fill_color=fill_color, fill_opacity=0.45,
             ).add_to(m)
 
-            # Centroid label — show payout rate + description; burn mode shows cost in red
-            cx, cy = poly.centroid.x, poly.centroid.y
+            # Use representative_point so label lands inside the ring, not at the center of a hole
+            rep_pt = poly.representative_point()
+            cx, cy = rep_pt.x, rep_pt.y
             desc = row.get("Description", "")
             if viz_mode == "burn":
                 label = f"🔥₹{price:,.0f}" if price > 0 else f"₹{rate}"
@@ -515,7 +520,6 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
             if pd.isna(wkt) or not wkt:
                 continue
             poly = wkt_loads(wkt)
-            latlon = [[lat, lon] for lon, lat in poly.exterior.coords]
 
             cc = row.get("Cluster_Code", "")
             hub = row.get(hub_col, "")
@@ -530,15 +534,14 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
                 f"<br><i>Idx: {idx}</i>"
             )
 
-            folium.Polygon(
-                locations=latlon,
+            # Use GeoJson so interior rings (donut holes) are rendered correctly
+            folium.GeoJson(
+                shapely_mapping(poly),
+                style_function=lambda x, hc=hub_color: {
+                    "fillColor": hc, "color": hc, "weight": 2.5, "fillOpacity": 0.35,
+                },
                 popup=folium.Popup(popup_html, max_width=280),
                 tooltip=f"{cc} — ₹{desc}",
-                color=hub_color,
-                weight=2.5,
-                fill=True,
-                fill_color=hub_color,
-                fill_opacity=0.35,
             ).add_to(fg)
         except Exception:
             continue

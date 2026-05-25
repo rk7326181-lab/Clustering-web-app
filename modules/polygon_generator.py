@@ -117,14 +117,13 @@ def _generate_cluster_polygons_core(cluster_df, pin_boundaries_df, radius_limit_
                 seq = pincode_seq.get(pc, 0)
                 for g in geoms:
                     if g.geom_type != "Polygon": continue
-                    coords = list(g.exterior.coords)
                     sfx = chr(65 + seq) if seq < 26 else f"Z{seq - 25}"
                     name = f"{pc}_{sfx}"
                     cat = CLUSTER_MAP.get(description.strip(), "Unknown")
                     records.append({
                         "Pincode": pc, "Hub Name": hub_name, "Cluster_Code": name,
                         "Description": description, "Cluster_Category": cat,
-                        "Polygon WKT": ShapelyPolygon(coords).wkt,
+                        "Polygon WKT": g.wkt,
                     })
                     seq += 1
                 pincode_seq[pc] = seq

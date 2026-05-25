@@ -335,9 +335,10 @@ def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
             gdf = gpd.GeoDataFrame({"label": poly_labels}, geometry=polys_for_gdf, crs="EPSG:4326").to_crs(epsg=3857)
             gdf.plot(ax=ax, alpha=0.25, color=hcm.get(hub_name, "#3498db"), edgecolor="black", linewidth=1.5, zorder=2)
             for _, rp in gdf.iterrows():
-                cx, cy = rp.geometry.centroid.x, rp.geometry.centroid.y
+                rep_pt = rp.geometry.representative_point()
+                cx, cy = rep_pt.x, rep_pt.y
                 ax.text(cx, cy, rp["label"], ha="center", va="center", fontsize=9, fontweight="bold",
-                        bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, boxstyle="round,pad=0.3"), zorder=4)
+                        bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, boxstyle="round,pad=0.3"), zorder=6)
             hub_gdf = gpd.GeoDataFrame(geometry=[gpd.points_from_xy([hlon], [hlat])[0]], crs="EPSG:4326").to_crs(epsg=3857)
             ax.plot(hub_gdf.geometry.iloc[0].x, hub_gdf.geometry.iloc[0].y, "r^", markersize=14, zorder=5)
             try:
