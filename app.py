@@ -280,6 +280,7 @@ from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
                    clean_pincode, get_download_bytes, show_df_download,
                    detect_latlon_cols, detect_geojson_pincode_field,
                    haversine_km, get_pricing, get_hub_color_map,
+                   save_file_path, load_file_paths_config, _filter_geojson_to_cluster,
                    CLUSTER_MAP, DESCRIPTION_MAPPING, HUB_COLORS, PRICING_SLABS,
                    PCAT_SOP, RATE_TO_PCAT, rate_to_pcat,
                    OUTPUT_DIR, HUB_IMG_DIR)
@@ -301,7 +302,10 @@ if "app_logs" not in st.session_state:
     st.session_state["app_logs"] = []
 
 def add_log(msg, level="info"):
-    st.session_state["app_logs"].append({"msg": msg, "level": level, "time": datetime.now().strftime("%H:%M:%S")})
+    logs = st.session_state["app_logs"]
+    logs.append({"msg": msg, "level": level, "time": datetime.now().strftime("%H:%M:%S")})
+    if len(logs) > 200:  # Prevent unbounded memory growth
+        st.session_state["app_logs"] = logs[-100:]
 
 def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
     """Render and save a PNG for a single hub using its current polygons. Returns the saved path or None."""
@@ -354,7 +358,9 @@ def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
         ax.set_axis_off()
         path = os.path.join(HUB_IMG_DIR, f"{hub_name.replace(' ', '_').replace('/', '_')}_Full_View.png")
         plt.savefig(path, dpi=200, bbox_inches="tight", facecolor="white", pad_inches=0.1)
-        plt.close(fig); gc.collect()
+        plt.close(fig)
+        plt.close("all")
+        gc.collect()
         st.session_state.setdefault("hub_images", {})[hub_name] = path
         add_log(f"Regenerated image for {hub_name}", "success")
         return path
@@ -556,15 +562,23 @@ else:
 
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 
-# Groq API key
-groq_key = st.sidebar.text_input(
-    "AI Agent Key (Groq)",
-    type="password",
-    value=st.session_state.get("groq_api_key", "") or os.environ.get("GROQ_API_KEY", ""),
-    help="Uses moonshotai/kimi-k2-instruct — free from console.groq.com"
-)
-if groq_key:
-    st.session_state["groq_api_key"] = groq_key
+# Groq API key — loaded from secrets/env, never shown or copied by users
+if not st.session_state.get("groq_api_key"):
+    _groq_loaded = ""
+    try:
+        _groq_loaded = st.secrets.get("GROQ_API_KEY", "") or ""
+    except Exception:
+        pass
+    if not _groq_loaded:
+        _groq_loaded = os.environ.get("GROQ_API_KEY", "") or ""
+    if _groq_loaded:
+        st.session_state["groq_api_key"] = _groq_loaded
+
+# Show status only — key is never displayed or editable
+if st.session_state.get("groq_api_key"):
+    st.sidebar.markdown('<div class="sfx-badge sfx-badge--ok"><span class="dot"></span>AI Agent Ready</div>', unsafe_allow_html=True)
+else:
+    st.sidebar.markdown('<div class="sfx-badge sfx-badge--warn"><span class="dot"></span>AI Agent Key Missing</div>', unsafe_allow_html=True)
 
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 
@@ -823,6 +837,24 @@ if nav.startswith("1"):
         st.markdown("#### Clustering Automation")
         mode = st.radio("Input mode", ["Upload CSV", "Manual Entry"], horizontal=True, key="cluster_mode")
         if mode == "Upload CSV":
+            # Show remembered path if available
+            _cfg_paths = load_file_paths_config()
+            _cl_saved_path = _cfg_paths.get("cluster_csv", "")
+            if _cl_saved_path:
+                st.markdown(f'<div class="sfx-ok">📂 Path saved — auto-loads on next start</div>', unsafe_allow_html=True)
+            # Optional: allow specifying a file path instead of uploading
+            _cl_path_inp = st.text_input("Or enter file path (auto-remembered)", value=_cl_saved_path, key="cl_path_inp", placeholder=r"C:\path\to\clustering.csv")
+            if _cl_path_inp and _cl_path_inp != _cl_saved_path and os.path.exists(_cl_path_inp):
+                try:
+                    df = pd.read_csv(_cl_path_inp, encoding="ISO-8859-1"); df.columns = df.columns.str.strip()
+                    req = ["Pincode", "Hub_Name", "Hub_lat", "Hub_long"]
+                    if all(c in df.columns for c in req):
+                        df = clean_pincode(df); st.session_state["cluster_df"] = df; st.session_state["upload_status"]["cluster"] = True
+                        save_file_path("cluster_csv", _cl_path_inp)
+                        add_log(f"Cluster CSV loaded from path: {len(df)} rows", "success")
+                        st.markdown(f'<div class="sfx-ok">✅ {len(df)} rows from path</div>', unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(str(e))
             f1 = st.file_uploader("Upload .csv", type=["csv"], key="up_cluster")
             if f1:
                 try:
@@ -833,6 +865,8 @@ if nav.startswith("1"):
                         st.error(f"Missing: {', '.join(miss)}")
                     else:
                         df = clean_pincode(df); st.session_state["cluster_df"] = df; st.session_state["upload_status"]["cluster"] = True
+                        st.session_state["_geojson_filtered"] = False  # Re-filter GeoJSON with new cluster
+                        _filter_geojson_to_cluster()
                         add_log(f"Cluster CSV loaded: {len(df)} rows, {df['Hub_Name'].nunique()} hubs", "success")
                         st.markdown(f'<div class="sfx-ok">✅ {len(df)} rows, {df["Hub_Name"].nunique()} hubs</div>', unsafe_allow_html=True)
                         st.dataframe(df, height=180)
@@ -875,7 +909,7 @@ if nav.startswith("1"):
                     st.session_state["pincodes_df"] = df; st.session_state["upload_status"]["pincodes"] = True
                     st.session_state["_pin_new_upload"] = True
                     add_log(f"Pincodes CSV loaded: {len(df)} rows", "success")
-                    # Persist to disk for future sessions
+                    # Persist to disk + remember path for future sessions
                     try:
                         ensure_output_dirs()
                         df.to_csv(os.path.join(OUTPUT_DIR, "pincodes_ref.csv"), index=False, encoding="utf-8-sig")
@@ -883,6 +917,7 @@ if nav.startswith("1"):
                     except Exception:
                         pass
                     st.dataframe(df.head(5), height=150)
+                    st.markdown('<div class="sfx-ok">📂 Saved — will auto-load next session</div>', unsafe_allow_html=True)
             except Exception as e:
                 st.error(str(e))
         if _pin_saved:
@@ -928,13 +963,16 @@ if nav.startswith("1"):
                 except Exception as e:
                     st.error(str(e))
         elif geo_mode == "File Path":
-            fp = st.text_input("Path", key="gp")
+            _cfg_now = load_file_paths_config()
+            fp = st.text_input("Path (remembered across sessions)", value=_cfg_now.get("geojson", ""), key="gp",
+                               placeholder=r"C:\path\to\boundaries.geojson")
             if st.button("Load", key="lgp") and fp:
                 try:
                     with open(fp, "r", encoding="utf-8") as f:
                         data = json.load(f)
                     pf = detect_geojson_pincode_field(data); st.session_state["geojson_data"] = data; st.session_state["upload_status"]["geojson"] = True
                     st.session_state["geojson_pincode_field"] = pf
+                    save_file_path("geojson", fp)
                     add_log(f"GeoJSON loaded from path: {len(data['features']):,} features", "success")
                     # Persist to disk
                     try:
@@ -943,7 +981,7 @@ if nav.startswith("1"):
                             json.dump(data, _gf)
                     except Exception:
                         pass
-                    st.markdown(f'<div class="sfx-ok">✅ {len(data["features"]):,} features</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="sfx-ok">✅ {len(data["features"]):,} features — path saved for auto-reload</div>', unsafe_allow_html=True)
                 except Exception as e:
                     st.error(str(e))
         else:
@@ -1192,7 +1230,7 @@ elif nav.startswith("3"):
         radius = st.number_input(
             "Default Distance Band Width (km)",
             min_value=0.5, max_value=20.0,
-            value=st.session_state.get("radius_limit_km", 4.0),
+            value=st.session_state.get("radius_limit_km", 5.0),
             step=0.01, format="%.2f", key="rad",
             help="Applies to all hubs unless per-hub radii are set below. Supports precise values like 4.14, 4.24, 4.3 km."
         )
@@ -1237,17 +1275,22 @@ elif nav.startswith("3"):
                 add_log("Polygon generation started", "info")
                 if hub_radius_map:
                     add_log(f"Per-hub radii: {hub_radius_map}", "info")
-                with st.spinner("Converting GeoJSON..."):
+                with st.status("Generating cluster polygons...", expanded=True) as _poly_status:
+                    st.write("Converting GeoJSON boundaries...")
                     bdf = convert_geojson_to_boundaries(geo, st.session_state.get("geojson_pincode_field"))
                     st.session_state["pin_boundaries_df"] = bdf
-                prog = st.progress(0, "Generating polygons...")
-                rdf, kml, skip = generate_cluster_polygons(
-                    cdf, bdf, radius,
-                    hub_radius_map=hub_radius_map if hub_radius_map else None,
-                    progress_cb=lambda p: prog.progress(p),
-                )
-                csv_p, xlsx_p, kml_p = save_polygon_outputs(rdf, kml, radius, hub_radius_map=hub_radius_map if hub_radius_map else None)
-                st.session_state["polygon_records_df"] = rdf; prog.empty()
+                    st.write(f"Building concentric ring polygons for {len(bdf)} pincodes...")
+                    _prog = st.progress(0)
+                    rdf, kml, skip = generate_cluster_polygons(
+                        cdf, bdf, radius,
+                        hub_radius_map=hub_radius_map if hub_radius_map else None,
+                        progress_cb=lambda p: _prog.progress(p),
+                    )
+                    _prog.empty()
+                    st.write("Saving outputs (CSV / XLSX / KML)...")
+                    csv_p, xlsx_p, kml_p = save_polygon_outputs(rdf, kml, radius, hub_radius_map=hub_radius_map if hub_radius_map else None)
+                    st.session_state["polygon_records_df"] = rdf
+                    _poly_status.update(label=f"✅ {len(rdf)} polygons generated", state="complete", expanded=False)
                 add_log(f"Polygon generation complete: {len(rdf)} polygons", "success")
                 st.markdown(f'<div class="sfx-ok">✅ {len(rdf)} polygons generated!</div>', unsafe_allow_html=True)
                 if skip:
@@ -1618,7 +1661,10 @@ elif nav.startswith("3"):
                         from shapely.wkt import loads as wkt_loads_apply
                         poly_df = st.session_state.get("polygon_records_df").copy()
                         wkt_col_name = "Polygon WKT" if "Polygon WKT" in poly_df.columns else "boundary"
-                        st.session_state.setdefault("edit_undo_stack", []).append(poly_df.copy())
+                        _undo_stk = st.session_state.setdefault("edit_undo_stack", [])
+                        _undo_stk.append(poly_df.copy())
+                        if len(_undo_stk) > 5:  # Cap to 5 to prevent memory accumulation
+                            st.session_state["edit_undo_stack"] = _undo_stk[-5:]
 
                         hub_mask = poly_df[hub_col] == hub_filter
                         original_centroids = []
@@ -1725,8 +1771,10 @@ elif nav.startswith("3"):
                 import geopandas as gpd
                 import contextily as ctx
                 out_dir = HUB_IMG_DIR; ensure_output_dirs()
-                all_hubs = pdf[hub_col].unique().tolist(); hcm = get_hub_color_map(all_hubs); hp = st.progress(0)
+                all_hubs = pdf[hub_col].unique().tolist(); hcm = get_hub_color_map(all_hubs)
+                _img_status = st.status(f"Generating {len(all_hubs)} hub image(s)...", expanded=True)
                 for hi, hn in enumerate(all_hubs):
+                    _img_status.update(label=f"Rendering {hn} ({hi + 1}/{len(all_hubs)})...", state="running")
                     hps = pdf[pdf[hub_col] == hn]
                     if hps.empty:
                         continue
@@ -1779,17 +1827,47 @@ elif nav.startswith("3"):
                     # Remove axes/scale — user doesn't want any scale
                     ax.set_axis_off()
                     path = os.path.join(out_dir, f"{hn.replace(' ', '_').replace('/', '_')}_Full_View.png")
-                    plt.savefig(path, dpi=200, bbox_inches="tight", facecolor="white", pad_inches=0.1); plt.close(fig); gc.collect()
-                    st.session_state["hub_images"][hn] = path; hp.progress((hi + 1) / len(all_hubs))
-                hp.empty(); add_log(f"Generated {len(all_hubs)} hub images", "success")
+                    plt.savefig(path, dpi=200, bbox_inches="tight", facecolor="white", pad_inches=0.1)
+                    plt.close(fig)
+                    plt.close("all")  # Release any leaked figure references
+                    gc.collect()
+                    st.session_state["hub_images"][hn] = path
+                _img_status.update(label=f"✅ {len(all_hubs)} hub image(s) generated", state="complete", expanded=False)
+                add_log(f"Generated {len(all_hubs)} hub images", "success")
                 st.markdown(f'<div class="sfx-ok">✅ {len(all_hubs)} images generated</div>', unsafe_allow_html=True)
             except Exception as e:
                 st.error(str(e))
-        for hn, path in st.session_state.get("hub_images", {}).items():
-            if os.path.exists(path):
-                with st.expander(f"{hn}"):
-                    st.image(path, use_container_width=True)
-                    st.download_button(f"Download {hn}", open(path, "rb").read(), os.path.basename(path), "image/png", key=f"di_{hn}")
+        # ── Download All Hub Images as ZIP ────────────────────────────────
+        # Merge session-state images with any PNGs already on disk (survives page refresh)
+        _disk_images = {}
+        if os.path.exists(HUB_IMG_DIR):
+            for _fname in sorted(os.listdir(HUB_IMG_DIR)):
+                if _fname.endswith(".png"):
+                    _fpath = os.path.join(HUB_IMG_DIR, _fname)
+                    _display = _fname.replace("_Full_View.png", "").replace("_", " ")
+                    _disk_images[_display] = _fpath
+        _session_images = {hn: p for hn, p in st.session_state.get("hub_images", {}).items() if os.path.exists(p)}
+        _existing_images = {**_disk_images, **_session_images}  # session takes priority
+        if _existing_images:
+            import zipfile, io as _io
+            _zip_buf = _io.BytesIO()
+            with zipfile.ZipFile(_zip_buf, "w", zipfile.ZIP_DEFLATED) as _zf:
+                for _hn, _p in _existing_images.items():
+                    _zf.write(_p, os.path.basename(_p))
+            _zip_buf.seek(0)
+            st.download_button(
+                f"📥 Download All Hub Images ({len(_existing_images)} hubs)",
+                _zip_buf.getvalue(),
+                "hub_images.zip",
+                "application/zip",
+                key="download_all_hub_images",
+                type="primary",
+            )
+
+        for hn, path in _existing_images.items():
+            with st.expander(f"{hn}"):
+                st.image(path, use_container_width=True)
+                st.download_button(f"Download {hn}", open(path, "rb").read(), os.path.basename(path), "image/png", key=f"di_{hn}")
 
 # ═══════════════════════════════════════════════════════
 # STEP 4 — AWB + VISUALISATION
@@ -1834,15 +1912,18 @@ elif nav.startswith("4"):
             pincodes = cdf["Pincode"].astype(str).str.strip().str.replace(".0", "", regex=False).tolist()
             st.caption(f"Querying {len(pincodes)} pincodes: {', '.join(pincodes[:10])}{'...' if len(pincodes) > 10 else ''}")
             start_time = time.time(); add_log("BigQuery AWB fetch started", "info")
-            with st.spinner("Running BigQuery query... this may take 30-60 seconds"):
+            with st.status("Fetching AWB data from BigQuery...", expanded=True) as _bq_status:
+                st.write(f"Querying {len(pincodes)} pincodes (30–60 s)...")
                 result_df, error = fetch_awb_data(bq_client, cdf)
             elapsed = time.time() - start_time
             if error:
+                _bq_status.update(label="❌ BigQuery query failed", state="error", expanded=True)
                 add_log(f"BigQuery error: {error}", "error")
                 st.markdown(f'<div class="sfx-err">{error}</div>', unsafe_allow_html=True)
                 if st.button("Retry", key="retry_awb"):
                     st.rerun()
             else:
+                _bq_status.update(label=f"✅ {len(result_df):,} rows fetched in {elapsed:.1f}s", state="complete", expanded=False)
                 st.session_state["awb_raw_df"] = result_df; st.session_state["last_bq_fetch"] = datetime.now()
                 add_log(f"AWB data fetched: {len(result_df):,} rows in {elapsed:.1f}s", "success")
                 st.markdown(f'<div class="sfx-ok">✅ {len(result_df):,} rows fetched in {elapsed:.1f}s</div>', unsafe_allow_html=True)
@@ -2052,15 +2133,20 @@ elif nav.startswith("5"):
         from modules.bigquery_client import fetch_live_clusters, fetch_hub_locations
         start = time.time()
         add_log("Fetching live clusters", "info")
-        with st.spinner("Fetching live clusters..."):
+        with st.status("Fetching live clusters from BigQuery...", expanded=True) as _lc_status:
+            st.write("Loading cluster assignments...")
             cd, e1 = fetch_live_clusters(bq_client, force_refresh=True)
+            st.write("Loading hub locations...")
             hd, e2 = fetch_hub_locations(bq_client, year, month)
         el = time.time() - start
         if e1:
+            _lc_status.update(label="❌ Cluster query failed", state="error", expanded=True)
             st.markdown(f'<div class="sfx-err">Cluster query: {e1}</div>', unsafe_allow_html=True)
         elif e2:
+            _lc_status.update(label="❌ Hub query failed", state="error", expanded=True)
             st.markdown(f'<div class="sfx-err">Hub query: {e2}</div>', unsafe_allow_html=True)
         else:
+            _lc_status.update(label=f"✅ {len(cd)} clusters, {len(hd)} hubs ({el:.1f}s)", state="complete", expanded=False)
             st.session_state["live_cluster_df"] = cd
             st.session_state["live_hub_df"] = hd
             st.session_state["last_refresh_time"] = datetime.now()

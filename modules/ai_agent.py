@@ -63,9 +63,18 @@ def _friendly_error(exc):
     return f"Groq API error: {s}"
 
 
+if HAS_STREAMLIT:
+    @st.cache_resource
+    def _get_groq_client(api_key: str):
+        return Groq(api_key=api_key, timeout=30.0)
+else:
+    def _get_groq_client(api_key: str):
+        return Groq(api_key=api_key, timeout=30.0)
+
+
 def _groq_chat(messages, api_key, temperature=0.3, max_tokens=1500):
     """Call Groq with model fallback + timeout. Returns response content or raises."""
-    client = Groq(api_key=api_key, timeout=30.0)
+    client = _get_groq_client(api_key)
     last_exc = None
     for model in MODEL_FALLBACK_CHAIN:
         try:

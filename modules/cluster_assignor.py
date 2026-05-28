@@ -100,9 +100,17 @@ def calculate_financials(df):
     r["P & L"] = r["Pin_Pay"] - r["Clustering_payout"]
     r["Saving"] = r["P & L"].apply(lambda x: x if x > 0 else 0)
     r["Burning"] = r["P & L"].apply(lambda x: -x if x < 0 else 0)
+    # Flag outside-zone orders (delivery not inside any cluster polygon)
+    r["outside_zone"] = r["cluster_name"].isna() | (r["cluster_name"].astype(str).str.strip() == "")
     fin_cols = ["Pin_Pay", "Clustering_payout", "Saving", "Burning", "P & L"]
-    mask = ~(r[fin_cols].fillna(0) == 0).all(axis=1)
-    return r[mask].reset_index(drop=True)
+    # Keep rows with financial data OR valid delivery coordinates (outside-zone visibility)
+    has_financial = ~(r[fin_cols].fillna(0) == 0).all(axis=1)
+    has_coords = (
+        r["lat"].notna() & r["long"].notna()
+        & (pd.to_numeric(r["lat"], errors="coerce") != 0)
+        & (pd.to_numeric(r["long"], errors="coerce") != 0)
+    )
+    return r[has_financial | has_coords].reset_index(drop=True)
 
 
 def build_spa_mapping(final_output_df):

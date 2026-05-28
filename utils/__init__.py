@@ -72,6 +72,35 @@ def _get_output_dir():
 OUTPUT_DIR = _get_output_dir()
 HUB_IMG_DIR = os.path.join(OUTPUT_DIR, "Hub_Payout_Views_Final_All_Hubs")
 
+# Path to the file that remembers user-specified file paths across sessions
+_FILE_PATHS_CONFIG = os.path.join(OUTPUT_DIR, "file_paths_config.json")
+
+
+def save_file_path(key: str, path: str):
+    """Persist a user-supplied file path so it auto-reloads next session."""
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        cfg = {}
+        if os.path.exists(_FILE_PATHS_CONFIG):
+            with open(_FILE_PATHS_CONFIG, "r", encoding="utf-8") as _f:
+                cfg = json.load(_f)
+        cfg[key] = path
+        with open(_FILE_PATHS_CONFIG, "w", encoding="utf-8") as _f:
+            json.dump(cfg, _f)
+    except Exception:
+        pass
+
+
+def load_file_paths_config() -> dict:
+    """Return the remembered file paths dict, or {} if not saved yet."""
+    try:
+        if os.path.exists(_FILE_PATHS_CONFIG):
+            with open(_FILE_PATHS_CONFIG, "r", encoding="utf-8") as _f:
+                return json.load(_f)
+    except Exception:
+        pass
+    return {}
+
 # Hub color palette — light, semi-transparent, distinct per hub
 HUB_COLORS = [
     "#3498db", "#2ecc71", "#e67e22", "#9b59b6", "#e74c3c",
@@ -199,7 +228,7 @@ ALL_STATE_KEYS = {
     "final_output_df": None, "pin_boundaries_df": None,
     "polygon_records_df": None, "awb_raw_df": None,
     "final_result_df": None, "bq_credentials": None,
-    "radius_limit_km": 4.0, "hub_radius_map": {}, "hub_images": {},
+    "radius_limit_km": 5.0, "hub_radius_map": {}, "hub_images": {},
     "live_cluster_df": None, "live_hub_df": None,
     "last_refresh_time": None, "groq_api_key": None,
     "ai_chat_history": [], "ai_auto_report": None, "burn_analysis_report": None,
@@ -301,7 +330,147 @@ def reload_from_disk():
                     pass
                 break
 
+    # ── Remembered file paths (file_paths_config.json) ──
+    # Users can register any file path once; it's saved and auto-reloaded every session.
+    _cfg = load_file_paths_config()
+
+    if st.session_state.get("pincodes_df") is None:
+        _pin_path = _cfg.get("pincodes_csv", "")
+        if _pin_path and os.path.exists(_pin_path):
+            try:
+                df = pd.read_csv(_pin_path)
+                df.columns = df.columns.str.strip()
+                if "Pincode" in df.columns:
+                    df = clean_pincode(df)
+                    lat_c, lon_c = detect_latlon_cols(df)
+                    st.session_state["pincodes_df"] = df
+                    st.session_state["upload_status"]["pincodes"] = True
+                    if lat_c:
+                        st.session_state.setdefault("vol_lat_col", lat_c)
+                    if lon_c:
+                        st.session_state.setdefault("vol_long_col", lon_c)
+                    loaded.append(f"Pincodes (remembered path)")
+            except Exception:
+                pass
+
+    if st.session_state.get("geojson_data") is None:
+        _geo_path = _cfg.get("geojson", "")
+        if _geo_path and os.path.exists(_geo_path):
+            try:
+                with open(_geo_path, "r", encoding="utf-8") as _f:
+                    data = json.load(_f)
+                if "features" in data:
+                    sample = data["features"][0].get("properties", {}) if data["features"] else {}
+                    pf = None
+                    for key in ["pincode", "Pincode", "PINCODE", "pin", "PIN", "postalcode", "postal_code"]:
+                        if key in sample:
+                            pf = key
+                            break
+                    st.session_state["geojson_data"] = data
+                    st.session_state["upload_status"]["geojson"] = True
+                    st.session_state.setdefault("geojson_pincode_field", pf)
+                    loaded.append("GeoJSON (remembered path)")
+            except Exception:
+                pass
+
+    if st.session_state.get("cluster_df") is None:
+        _cl_path = _cfg.get("cluster_csv", "")
+        if _cl_path and os.path.exists(_cl_path):
+            try:
+                df = pd.read_csv(_cl_path, encoding="ISO-8859-1")
+                df.columns = df.columns.str.strip()
+                req = ["Pincode", "Hub_Name", "Hub_lat", "Hub_long"]
+                if all(c in df.columns for c in req):
+                    df = clean_pincode(df)
+                    st.session_state["cluster_df"] = df
+                    st.session_state["upload_status"]["cluster"] = True
+                    loaded.append("Cluster CSV (remembered path)")
+            except Exception:
+                pass
+
+    # ── Hardcoded fallback paths — load from user's known Downloads location ──
+    # If found, the path is saved to file_paths_config.json so future sessions
+    # load from there without needing the hardcoded constant.
+    _HC_PINCODES = r"C:\Users\RAVINDRA KUMAR\Downloads\Pincodes 1.csv"
+    _HC_GEOJSON  = r"C:\Users\RAVINDRA KUMAR\Downloads\All_India_pincode_Boundary-19312 (1).geojson"
+
+    if st.session_state.get("pincodes_df") is None and os.path.exists(_HC_PINCODES):
+        try:
+            df = pd.read_csv(_HC_PINCODES)
+            df.columns = df.columns.str.strip()
+            if "Pincode" in df.columns:
+                df = clean_pincode(df)
+                lat_c, lon_c = detect_latlon_cols(df)
+                st.session_state["pincodes_df"] = df
+                st.session_state["upload_status"]["pincodes"] = True
+                if lat_c:
+                    st.session_state.setdefault("vol_lat_col", lat_c)
+                if lon_c:
+                    st.session_state.setdefault("vol_long_col", lon_c)
+                save_file_path("pincodes_csv", _HC_PINCODES)
+                loaded.append("Pincodes 1.csv (hardcoded path)")
+        except Exception:
+            pass
+
+    if st.session_state.get("geojson_data") is None and os.path.exists(_HC_GEOJSON):
+        try:
+            with open(_HC_GEOJSON, "r", encoding="utf-8") as _f:
+                data = json.load(_f)
+            if "features" in data:
+                sample = data["features"][0].get("properties", {}) if data["features"] else {}
+                pf = None
+                for key in ["pincode", "Pincode", "PINCODE", "pin", "PIN", "postalcode", "postal_code"]:
+                    if key in sample:
+                        pf = key
+                        break
+                st.session_state["geojson_data"] = data
+                st.session_state["upload_status"]["geojson"] = True
+                st.session_state.setdefault("geojson_pincode_field", pf)
+                save_file_path("geojson", _HC_GEOJSON)
+                loaded.append("GeoJSON (hardcoded path)")
+        except Exception:
+            pass
+
+    # ── GeoJSON memory reduction: filter to cluster pincodes only ──
+    # The All-India GeoJSON has 19 000+ features (~86 MB). If we have cluster_df,
+    # we only need the few hundred pincodes that appear in it.
+    _filter_geojson_to_cluster()
+
     return loaded
+
+
+def _filter_geojson_to_cluster():
+    """
+    Shrink geojson_data in session state to only features for pincodes in cluster_df.
+    Reduces memory from ~86 MB (all India) to ~3–10 MB (cluster pincodes only).
+    """
+    geo = st.session_state.get("geojson_data")
+    cdf = st.session_state.get("cluster_df")
+    if geo is None or cdf is None:
+        return
+    if st.session_state.get("_geojson_filtered"):
+        return  # Already filtered this session
+
+    pf = st.session_state.get("geojson_pincode_field")
+    if not pf:
+        sample = geo["features"][0].get("properties", {}) if geo.get("features") else {}
+        for k in ["pincode", "Pincode", "PINCODE", "pin", "PIN"]:
+            if k in sample:
+                pf = k; break
+
+    try:
+        cluster_pins = set(
+            cdf["Pincode"].astype(str).str.strip().str.replace(".0", "", regex=False)
+        )
+        filtered = [
+            f for f in geo.get("features", [])
+            if str(f.get("properties", {}).get(pf, "")).strip().replace(".0", "") in cluster_pins
+        ]
+        if filtered:
+            st.session_state["geojson_data"] = {**geo, "features": filtered}
+            st.session_state["_geojson_filtered"] = True
+    except Exception:
+        pass
 
 
 # ============================================================

@@ -22,3 +22,6 @@ Thumbs.db
 
 # Environment variables
 .env
+
+# User-specific runtime config (per-machine file paths)
+outputs/file_paths_config.json
