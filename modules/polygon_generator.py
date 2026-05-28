@@ -68,7 +68,7 @@ def _make_bands(step_km):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _generate_cluster_polygons_core(cluster_df, pin_boundaries_df, radius_limit_km=4, hub_radius_map=None):
+def _generate_cluster_polygons_core(cluster_df, pin_boundaries_df, radius_limit_km=5, hub_radius_map=None):
     """Core polygon generation logic (cached). Returns (records list, skipped list)."""
     hub_radius_map = hub_radius_map or {}
     live = clean_pincode(cluster_df.copy())
