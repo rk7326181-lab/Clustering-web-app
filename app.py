@@ -562,23 +562,31 @@ else:
 
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 
-# Groq API key — loaded from secrets/env, never shown or copied by users
+# Groq API key — loaded from secrets/env, never shown or copied by users.
+# Uses the same robust resolver as ai_agent.py (handles multiple secret name variants).
 if not st.session_state.get("groq_api_key"):
-    _groq_loaded = ""
     try:
-        _groq_loaded = st.secrets.get("GROQ_API_KEY", "") or ""
+        from modules.ai_agent import _resolve_api_key as _resolve_groq_key
+        _groq_loaded = _resolve_groq_key() or ""
+        if _groq_loaded:
+            st.session_state["groq_api_key"] = _groq_loaded
     except Exception:
         pass
-    if not _groq_loaded:
-        _groq_loaded = os.environ.get("GROQ_API_KEY", "") or ""
-    if _groq_loaded:
-        st.session_state["groq_api_key"] = _groq_loaded
 
 # Show status only — key is never displayed or editable
 if st.session_state.get("groq_api_key"):
     st.sidebar.markdown('<div class="sfx-badge sfx-badge--ok"><span class="dot"></span>AI Agent Ready</div>', unsafe_allow_html=True)
 else:
-    st.sidebar.markdown('<div class="sfx-badge sfx-badge--warn"><span class="dot"></span>AI Agent Key Missing</div>', unsafe_allow_html=True)
+    st.sidebar.markdown(
+        '<div class="sfx-badge sfx-badge--warn"><span class="dot"></span>AI Agent Key Missing</div>'
+        '<div style="font-size:10px;color:var(--sfx-muted);margin-top:4px;line-height:1.3">'
+        'Add <b>GROQ_API_KEY</b> to Streamlit Cloud secrets. '
+        'Place it at the <b>top</b> of the secrets file, '
+        '<b>above</b> any <code>[section]</code> header, '
+        'or TOML will nest it inside the previous section.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 
@@ -1838,16 +1846,26 @@ elif nav.startswith("3"):
             except Exception as e:
                 st.error(str(e))
         # ── Download All Hub Images as ZIP ────────────────────────────────
-        # Merge session-state images with any PNGs already on disk (survives page refresh)
-        _disk_images = {}
+        # Merge session-state images with any PNGs already on disk (survives page refresh).
+        # Dedup by normalized name (spaces & underscores treated identically) so the same
+        # hub doesn't appear twice when session-state uses "BRSD Dindori" and disk uses
+        # "BRSD_Dindori_Full_View.png".
+        def _norm_hub(s):
+            return str(s).replace(" ", "_").replace("/", "_").lower()
+
+        _dedup = {}  # norm_key -> (display_name, path)
+        # Session entries take priority (they reflect the actual hub name from cluster_df)
+        for _hn, _p in st.session_state.get("hub_images", {}).items():
+            if os.path.exists(_p):
+                _dedup[_norm_hub(_hn)] = (_hn, _p)
         if os.path.exists(HUB_IMG_DIR):
             for _fname in sorted(os.listdir(HUB_IMG_DIR)):
                 if _fname.endswith(".png"):
-                    _fpath = os.path.join(HUB_IMG_DIR, _fname)
-                    _display = _fname.replace("_Full_View.png", "").replace("_", " ")
-                    _disk_images[_display] = _fpath
-        _session_images = {hn: p for hn, p in st.session_state.get("hub_images", {}).items() if os.path.exists(p)}
-        _existing_images = {**_disk_images, **_session_images}  # session takes priority
+                    _stem = _fname.replace("_Full_View.png", "")
+                    _key = _norm_hub(_stem)
+                    if _key not in _dedup:
+                        _dedup[_key] = (_stem, os.path.join(HUB_IMG_DIR, _fname))
+        _existing_images = {display: path for (display, path) in _dedup.values()}
         if _existing_images:
             import zipfile, io as _io
             _zip_buf = _io.BytesIO()

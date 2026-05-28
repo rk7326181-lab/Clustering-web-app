@@ -173,16 +173,33 @@ def create_polygon_map_cached(poly_hash, cluster_hash, awb_hash,
 
 
 def _base_map(center_lat, center_lon, zoom=9, satellite=False, draw_enabled=False):
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, tiles=None)
+    # India bounding box: approx (6.5°N, 68°E) to (37°N, 97.5°E).
+    # min_zoom=4 prevents zoom-out below sub-continent view (no world-tile downloads);
+    # max_bounds + maxBounds restricts panning so users can't scroll off into the
+    # Pacific or Africa (saves tile bandwidth + lowers memory pressure on Cloud).
+    _INDIA_SW = [6.5, 68.0]
+    _INDIA_NE = [37.0, 97.5]
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=zoom,
+        tiles=None,
+        min_zoom=4,
+        max_bounds=True,
+    )
+    # Apply the India bounding box as a hard pan limit on the underlying Leaflet map
+    m.options["maxBounds"] = [_INDIA_SW, _INDIA_NE]
     # Multi-tile layers — Street / Satellite / Terrain
-    folium.TileLayer("OpenStreetMap", name="Street Map").add_to(m)
+    folium.TileLayer("OpenStreetMap", name="Street Map", min_zoom=4, max_zoom=18,
+                     bounds=[_INDIA_SW, _INDIA_NE]).add_to(m)
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri", name="Satellite", overlay=False, control=True
+        attr="Esri", name="Satellite", overlay=False, control=True,
+        min_zoom=4, max_zoom=18, bounds=[_INDIA_SW, _INDIA_NE],
     ).add_to(m)
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri", name="Terrain", overlay=False, control=True
+        attr="Esri", name="Terrain", overlay=False, control=True,
+        min_zoom=4, max_zoom=18, bounds=[_INDIA_SW, _INDIA_NE],
     ).add_to(m)
     # Draw plugin (only when edit mode is on)
     if draw_enabled:
