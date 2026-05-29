@@ -58,39 +58,120 @@ def get_cluster_for_point(lat, lon, clusters, polygons=None, tree=None):
 
 
 def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
+    """Vectorised point-in-polygon using geopandas sjoin (Shapely 2 + GEOS).
+    Replaces the O(n * m) iterrows loop that timed out on large datasets."""
+    import geopandas as gpd
+
     clusters, polygons, tree = load_clusters(polygon_df)
+
     df = awb_df.copy()
     df.columns = df.columns.str.strip().str.lower()
     df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
     df["long"] = pd.to_numeric(df["long"], errors="coerce")
     df = df.dropna(subset=["lat", "long"])
-    df = df[(df["lat"] != 0) & (df["long"] != 0)].copy()
+    df = df[(df["lat"] != 0) & (df["long"] != 0)].reset_index(drop=True)
 
-    results = []
-    total = len(df)
-    for i, (_, row) in enumerate(df.iterrows()):
-        lat, lon, pc = row["lat"], row["long"], row.get("pincode", "")
-        name, desc = get_cluster_for_point(lat, lon, clusters, polygons, tree)
-        if not name:
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "order_date", "awb_number", "rider_id", "pincode",
+            "payment_category", "hub", "lat", "long", "cluster_name", "description",
+        ])
+
+    n = len(df)
+    lats = df["lat"].to_numpy()
+    lons = df["long"].to_numpy()
+
+    def _col(name, *aliases):
+        for k in (name,) + aliases:
+            if k in df.columns:
+                return df[k].to_numpy()
+        return np.full(n, "", dtype=object)
+
+    pincodes    = _col("pincode")
+    order_dates = _col("order_date")
+    awb_numbers = _col("fwd_del_awb_number", "awb_number")
+    rider_ids   = _col("rider_id")
+    hubs        = _col("hub")
+
+    cluster_name_col = np.full(n, None, dtype=object)
+    description_col  = np.full(n, None, dtype=object)
+
+    if progress_cb:
+        progress_cb(0.05)
+
+    # ── Spatial join (vectorised) ─────────────────────────────────────────────
+    if clusters and polygons:
+        pts_gdf = gpd.GeoDataFrame(
+            {"_orig_i": np.arange(n)},
+            geometry=gpd.points_from_xy(lons, lats),
+            crs="EPSG:4326",
+        )
+        polys_gdf = gpd.GeoDataFrame(
+            {
+                "cluster_name": [c["name"] for c in clusters],
+                "description":  [c["description"] for c in clusters],
+            },
+            geometry=[c["polygon"] for c in clusters],
+            crs="EPSG:4326",
+        )
+
+        if progress_cb:
+            progress_cb(0.20)
+
+        joined = gpd.sjoin(pts_gdf, polys_gdf, how="left", predicate="within")
+        joined = joined.drop_duplicates(subset=["_orig_i"])
+        matched = joined[joined["cluster_name"].notna()]
+        if not matched.empty:
+            mi = matched["_orig_i"].to_numpy().astype(int)
+            cluster_name_col[mi] = matched["cluster_name"].to_numpy()
+            description_col[mi]  = matched["description"].to_numpy()
+
+    if progress_cb:
+        progress_cb(0.70)
+
+    # ── Pincode fallback for unmatched rows ───────────────────────────────────
+    unmatched = pd.isnull(cluster_name_col)
+    if unmatched.any():
+        for i in np.where(unmatched)[0]:
             try:
-                pc_int = int(float(str(pc)))
+                pc_int = int(float(str(pincodes[i])))
                 if pc_int in FALLBACK_PINCODE_MAP:
-                    name, desc = "Previous mapping", FALLBACK_PINCODE_MAP[pc_int]
+                    cluster_name_col[i] = "Previous mapping"
+                    description_col[i]  = FALLBACK_PINCODE_MAP[pc_int]
             except (ValueError, TypeError):
                 pass
-        pc_str = str(pc).strip().replace(".0", "").strip()
-        payment = spa_mapping.get(pc_str, spa_mapping.get(
-            int(float(pc_str)) if pc_str.replace('.', '', 1).isdigit() else pc_str, None))
-        results.append({
-            "order_date": row.get("order_date", ""),
-            "awb_number": row.get("fwd_del_awb_number", row.get("awb_number", "")),
-            "rider_id": row.get("rider_id", ""), "pincode": pc,
-            "payment_category": payment, "hub": row.get("hub", ""),
-            "lat": lat, "long": lon, "cluster_name": name, "description": desc,
-        })
-        if progress_cb and (i % 500 == 0 or i == total - 1):
-            progress_cb((i + 1) / total)
-    return pd.DataFrame(results)
+
+    # ── Payment mapping ───────────────────────────────────────────────────────
+    pc_str_series = (
+        pd.Series(pincodes).astype(str).str.strip()
+        .str.replace(".0", "", regex=False).str.strip()
+    )
+    payment_col = pc_str_series.map(spa_mapping)
+    need_int = payment_col.isna()
+    if need_int.any():
+        for idx in payment_col.index[need_int]:
+            ps = pc_str_series.iloc[idx]
+            if ps.replace(".", "", 1).isdigit():
+                try:
+                    payment_col.iloc[idx] = spa_mapping.get(int(float(ps)))
+                except (ValueError, TypeError):
+                    pass
+
+    if progress_cb:
+        progress_cb(1.0)
+
+    return pd.DataFrame({
+        "order_date":       order_dates,
+        "awb_number":       awb_numbers,
+        "rider_id":         rider_ids,
+        "pincode":          pincodes,
+        "payment_category": payment_col.to_numpy(),
+        "hub":              hubs,
+        "lat":              lats,
+        "long":             lons,
+        "cluster_name":     cluster_name_col,
+        "description":      description_col,
+    })
 
 
 def calculate_financials(df):
