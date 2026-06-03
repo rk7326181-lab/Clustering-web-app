@@ -1672,82 +1672,86 @@ elif nav.startswith("3"):
                     map_out_s3 = None
                     st.warning("Could not render editable map — no polygons to display for this hub.")
 
-                # Store drawings in session state the moment they arrive so they
-                # survive the re-render triggered when the user clicks Apply.
+                # ── AUTO-SAVE on Leaflet-Draw ✓ Save ──────────────────────────
+                # When draw:edited fires (user clicks ✓ on map toolbar),
+                # apply reshapes IMMEDIATELY so the map rebuilds with saved shapes.
+                # No separate "Apply" button needed — mirrors Maps Studio behaviour.
                 if map_out_s3 and map_out_s3.get("all_drawings"):
-                    st.session_state["_s3_drawings"] = map_out_s3["all_drawings"]
+                    from shapely.geometry import Polygon as _SP3
+                    from shapely.wkt import loads as _wl3
+                    _drawings3 = map_out_s3["all_drawings"]
+                    _poly3 = st.session_state.get("polygon_records_df").copy()
+                    _wc3 = "Polygon WKT" if "Polygon WKT" in _poly3.columns else "boundary"
 
-                _s3_drawings = st.session_state.get("_s3_drawings", [])
-                if _s3_drawings:
-                    drawings = _s3_drawings
-                    st.markdown(
-                        f'<div class="sfx-ok">📐 {len(drawings)} polygon(s) ready — click Apply to save.</div>',
-                        unsafe_allow_html=True,
-                    )
-                    if st.button("💾 Apply & Regenerate Image", type="primary", key="apply_vertex_edits"):
-                        from shapely.geometry import Polygon as ShapelyPolygon
-                        from shapely.wkt import loads as wkt_loads_apply
-                        poly_df = st.session_state.get("polygon_records_df").copy()
-                        wkt_col_name = "Polygon WKT" if "Polygon WKT" in poly_df.columns else "boundary"
-                        _undo_stk = st.session_state.setdefault("edit_undo_stack", [])
-                        _undo_stk.append(poly_df.copy())
-                        if len(_undo_stk) > 5:  # Cap to 5 to prevent memory accumulation
-                            st.session_state["edit_undo_stack"] = _undo_stk[-5:]
+                    # Push undo snapshot (cap at 10)
+                    _undo3 = st.session_state.setdefault("edit_undo_stack", [])
+                    _undo3.append(_poly3.copy())
+                    if len(_undo3) > 10:
+                        st.session_state["edit_undo_stack"] = _undo3[-10:]
 
-                        hub_mask = poly_df[hub_col] == hub_filter
-                        original_centroids = []
-                        for i, r in poly_df[hub_mask].iterrows():
-                            try:
-                                p = wkt_loads_apply(str(r.get(wkt_col_name, "")))
-                                original_centroids.append((i, p.centroid.x, p.centroid.y))
-                            except Exception:
-                                continue
-
-                        matched_ids, new_rows, matched_count = set(), [], 0
-                        for drawing in drawings:
-                            geom = drawing.get("geometry", {})
-                            if geom.get("type") != "Polygon":
-                                continue
-                            coords = geom.get("coordinates", [[]])[0]
-                            if len(coords) < 4:
-                                continue
-                            new_poly = ShapelyPolygon([(c[0], c[1]) for c in coords])
-                            new_wkt = "POLYGON((" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + "))"
-                            new_cx, new_cy = new_poly.centroid.x, new_poly.centroid.y
-
-                            best_idx, best_dist = None, float("inf")
-                            for (orig_idx, ocx, ocy) in original_centroids:
-                                if orig_idx in matched_ids:
-                                    continue
-                                d = ((ocx - new_cx) ** 2 + (ocy - new_cy) ** 2) ** 0.5
-                                if d < best_dist and d < 0.05:
-                                    best_dist = d
-                                    best_idx = orig_idx
-
-                            if best_idx is not None:
-                                poly_df.at[best_idx, wkt_col_name] = new_wkt
-                                matched_ids.add(best_idx)
-                                matched_count += 1
-                            else:
-                                new_rows.append({wkt_col_name: new_wkt})
-
-                        deleted_ids = [i for (i, _, _) in original_centroids if i not in matched_ids]
-                        if deleted_ids:
-                            poly_df = poly_df.drop(index=deleted_ids).reset_index(drop=True)
-
-                        st.session_state["polygon_records_df"] = poly_df
+                    # Compute original centroids for this hub
+                    _hub_rows3 = _poly3[_poly3[hub_col] == hub_filter] if hub_filter != "All Hubs" else _poly3
+                    _orig3 = []
+                    for _i3, _r3 in _hub_rows3.iterrows():
                         try:
-                            poly_df.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"), index=False, encoding="utf-8-sig")
+                            _g3 = _wl3(str(_r3.get(_wc3, "")))
+                            _orig3.append((_i3, _g3.centroid.x, _g3.centroid.y))
+                        except Exception:
+                            continue
+
+                    _matched3, _new3, _cnt3 = set(), [], 0
+                    for _drw3 in _drawings3:
+                        if _drw3.get("geometry", {}).get("type") != "Polygon":
+                            continue
+                        _co3 = _drw3["geometry"].get("coordinates", [[]])[0]
+                        if len(_co3) < 4:
+                            continue
+                        _np3 = _SP3([(_c[0], _c[1]) for _c in _co3])
+                        _nw3 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co3) + "))"
+                        _cx3, _cy3 = _np3.centroid.x, _np3.centroid.y
+                        _best3, _bd3 = None, float("inf")
+                        for (_oi3, _ox3, _oy3) in _orig3:
+                            if _oi3 in _matched3:
+                                continue
+                            _d3 = ((_ox3 - _cx3)**2 + (_oy3 - _cy3)**2)**0.5
+                            if _d3 < _bd3 and _d3 < 0.05:
+                                _bd3 = _d3; _best3 = _oi3
+                        if _best3 is not None:
+                            _poly3.at[_best3, _wc3] = _nw3
+                            _matched3.add(_best3); _cnt3 += 1
+                        else:
+                            _new3.append(_drw3)
+
+                    _del3 = [_i for (_i, _, _) in _orig3 if _i not in _matched3]
+                    if _del3:
+                        _poly3 = _poly3.drop(index=_del3).reset_index(drop=True)
+
+                    # Save reshaped / deleted polygons
+                    if _cnt3 or _del3:
+                        st.session_state["polygon_records_df"] = _poly3
+                        try:
+                            _poly3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
+                                          index=False, encoding="utf-8-sig")
                         except Exception:
                             pass
-                        add_log(f"[{hub_filter}] reshaped {matched_count}, deleted {len(deleted_ids)}, new {len(new_rows)}", "success")
-                        st.session_state["_s3_drawings"] = []  # clear stored drawings
-                        if new_rows:
-                            st.session_state["_pending_new_polys"] = new_rows
-                            st.session_state["_pending_new_polys_hub"] = hub_filter
-                        else:
-                            _regenerate_hub_image(hub_filter, poly_df, cdf, hub_col)
-                            st.success(f"✅ Applied edits and regenerated image for {hub_filter}.")
+                        add_log(f"[{hub_filter}] auto-saved: {_cnt3} reshaped, {len(_del3)} deleted", "success")
+
+                    # Queue new drawn polygons for metadata form
+                    if _new3:
+                        st.session_state["_pending_new_polys"] = [
+                            {_wc3: "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _drw["geometry"]["coordinates"][0]) + "))"}
+                            for _drw in _new3
+                        ]
+                        st.session_state["_pending_new_polys_hub"] = hub_filter
+
+                    if _cnt3 or _del3:
+                        st.rerun()  # Rebuild map with updated polygon shapes
+
+                # Undo button
+                if st.session_state.get("edit_undo_stack"):
+                    if st.button("↶ Undo Last Edit", key="s3_undo_btn"):
+                        st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
+                        add_log("Undid last polygon edit", "warning")
                         st.rerun()
 
                 pending_new = st.session_state.get("_pending_new_polys")
@@ -2034,7 +2038,7 @@ elif nav.startswith("4"):
             st.info(
                 "**Edit Mode ON** — existing polygons are now editable:  \n"
                 "• Click the **✏ Edit icon** (left toolbar) → drag any vertex to reshape  \n"
-                "• Click **✓ Save** on the toolbar when done, then hit **💾 Apply Edits & Refresh Map**  \n"
+                "• Click **✓ Save** on the toolbar → changes save automatically and map refreshes  \n"
                 "• Draw a new polygon with the polygon tool  \n"
                 "• Click any polygon on the map to edit its surge rate, cluster code, or delete it"
             )
@@ -2152,79 +2156,61 @@ elif nav.startswith("4"):
                             except Exception:
                                 continue
 
-            # ── Apply Vertex Edits ────────────────────────────────────────────
-            # Store drawings in session state the moment they arrive.
+            # ── AUTO-SAVE on Leaflet-Draw ✓ Save (Step 4) ────────────────────
             if edit_mode_s4 and map_out_s4 and map_out_s4.get("all_drawings"):
-                st.session_state["_s4_drawings"] = map_out_s4["all_drawings"]
+                from shapely.geometry import Polygon as _SP4
+                from shapely.wkt import loads as _wl4a
+                _draw4 = map_out_s4["all_drawings"]
+                _pd4 = st.session_state.get("polygon_records_df").copy()
+                _wc4 = "Polygon WKT" if "Polygon WKT" in _pd4.columns else "boundary"
+                _hc4 = "Hub Name" if "Hub Name" in _pd4.columns else "hub_name"
+                _undo4 = st.session_state.setdefault("edit_undo_stack", [])
+                _undo4.append(_pd4.copy())
+                if len(_undo4) > 10:
+                    st.session_state["edit_undo_stack"] = _undo4[-10:]
+                _iter4 = _pd4[_pd4[_hc4] == sel_hub] if sel_hub != "All Hubs" else _pd4
+                _orig4 = []
+                for _i4, _r4 in _iter4.iterrows():
+                    try:
+                        _g4 = _wl4a(str(_r4.get(_wc4, "")))
+                        _orig4.append((_i4, _g4.centroid.x, _g4.centroid.y))
+                    except Exception:
+                        continue
+                _matched4, _cnt4 = set(), 0
+                for _drw4 in _draw4:
+                    if _drw4.get("geometry", {}).get("type") != "Polygon":
+                        continue
+                    _co4 = _drw4["geometry"].get("coordinates", [[]])[0]
+                    if len(_co4) < 4:
+                        continue
+                    _np4 = _SP4([(_c[0], _c[1]) for _c in _co4])
+                    _nw4 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co4) + "))"
+                    _cx4, _cy4 = _np4.centroid.x, _np4.centroid.y
+                    _best4, _bd4 = None, float("inf")
+                    for (_oi4, _ox4, _oy4) in _orig4:
+                        if _oi4 in _matched4:
+                            continue
+                        _d4 = ((_ox4 - _cx4)**2 + (_oy4 - _cy4)**2)**0.5
+                        if _d4 < _bd4 and _d4 < 0.05:
+                            _bd4 = _d4; _best4 = _oi4
+                    if _best4 is not None:
+                        _pd4.at[_best4, _wc4] = _nw4; _matched4.add(_best4); _cnt4 += 1
+                _del4 = [_i for (_i, _, _) in _orig4 if _i not in _matched4]
+                if _del4:
+                    _pd4 = _pd4.drop(index=_del4).reset_index(drop=True)
+                if _cnt4 or _del4:
+                    st.session_state["polygon_records_df"] = _pd4
+                    try:
+                        _pd4.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
+                                    index=False, encoding="utf-8-sig")
+                    except Exception:
+                        pass
+                    add_log(f"[{sel_hub}] auto-saved: {_cnt4} reshaped, {len(_del4)} deleted", "success")
+                    st.rerun()
 
-            _s4_drawings = st.session_state.get("_s4_drawings", [])
-            if edit_mode_s4 and _s4_drawings:
-                drawings = _s4_drawings
-                st.markdown(
-                    f'<div class="sfx-ok">📐 {len(drawings)} polygon(s) ready — click Apply to save.</div>',
-                    unsafe_allow_html=True
-                )
-                _undo_col, _apply_col = st.columns(2)
-                with _undo_col:
-                    if st.session_state.get("edit_undo_stack") and st.button("↶ Undo Last Edit", key="s4_undo"):
-                        st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
-                        st.session_state["_s4_drawings"] = []
-                        add_log("Undid last polygon edit (Step 4)", "warning")
-                        st.rerun()
-                with _apply_col:
-                    if st.button("💾 Apply Edits & Refresh Map", type="primary", key="apply_s4_vertex"):
-                        from shapely.geometry import Polygon as _SP4
-                        from shapely.wkt import loads as _wl4a
-                        _pd4 = st.session_state.get("polygon_records_df").copy()
-                        _wc4 = "Polygon WKT" if "Polygon WKT" in _pd4.columns else "boundary"
-                        st.session_state.setdefault("edit_undo_stack", []).append(_pd4.copy())
-                        _hcol4 = "Hub Name" if "Hub Name" in _pd4.columns else "hub_name"
-                        _iter4 = _pd4[_pd4[_hcol4] == sel_hub] if sel_hub != "All Hubs" else _pd4
-                        _orig4 = []
-                        for _i4, _r4 in _iter4.iterrows():
-                            try:
-                                _g4 = _wl4a(str(_r4.get(_wc4, "")))
-                                _orig4.append((_i4, _g4.centroid.x, _g4.centroid.y))
-                            except Exception:
-                                continue
-                        _matched4, _new4, _cnt4 = set(), [], 0
-                        for _drw in drawings:
-                            _g = _drw.get("geometry", {})
-                            if _g.get("type") != "Polygon":
-                                continue
-                            _coords = _g.get("coordinates", [[]])[0]
-                            if len(_coords) < 4:
-                                continue
-                            _np4 = _SP4([(_c[0], _c[1]) for _c in _coords])
-                            _nwkt = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _coords) + "))"
-                            _ncx, _ncy = _np4.centroid.x, _np4.centroid.y
-                            _best, _bd = None, float("inf")
-                            for (_oi, _ox, _oy) in _orig4:
-                                if _oi in _matched4:
-                                    continue
-                                _d = ((_ox - _ncx)**2 + (_oy - _ncy)**2)**0.5
-                                if _d < _bd and _d < 0.05:
-                                    _bd = _d; _best = _oi
-                            if _best is not None:
-                                _pd4.at[_best, _wc4] = _nwkt; _matched4.add(_best); _cnt4 += 1
-                            else:
-                                _new4.append({_wc4: _nwkt})
-                        _del4 = [_i for (_i, _, _) in _orig4 if _i not in _matched4]
-                        if _del4:
-                            _pd4 = _pd4.drop(index=_del4).reset_index(drop=True)
-                        st.session_state["polygon_records_df"] = _pd4
-                        try:
-                            _pd4.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"), index=False, encoding="utf-8-sig")
-                        except Exception:
-                            pass
-                        add_log(f"[{sel_hub}] Vertex edits applied: {_cnt4} reshaped, {len(_del4)} deleted, {len(_new4)} new", "success")
-                        st.session_state["_s4_drawings"] = []  # clear stored drawings
-                        st.success(f"✅ Applied — {_cnt4} reshaped, {len(_del4)} deleted, {len(_new4)} new. Map refreshed.")
-                        st.rerun()
-
-            # Undo button always visible when stack has entries
-            elif edit_mode_s4 and st.session_state.get("edit_undo_stack"):
-                if st.button("↶ Undo Last Edit", key="s4_undo_nodrw"):
+            # Undo button
+            if edit_mode_s4 and st.session_state.get("edit_undo_stack"):
+                if st.button("↶ Undo Last Edit", key="s4_undo_btn"):
                     st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
                     add_log("Undid last polygon edit (Step 4)", "warning")
                     st.rerun()
@@ -2516,8 +2502,8 @@ elif nav.startswith("5"):
         if edit_mode_s5:
             st.info(
                 "**Edit Mode ON** — existing cluster polygons are now editable:  \n"
-                "• Click the **✏ Edit icon** (left toolbar) → drag any vertex to reshape a cluster boundary  \n"
-                "• Click **✓ Save** on the toolbar when done, then hit **💾 Apply Vertex Edits & Refresh Map**  \n"
+                "• Click the **✏ Edit icon** (left toolbar) → drag any vertex to reshape  \n"
+                "• Click **✓ Save** on the toolbar → changes save automatically and map refreshes  \n"
                 "• Draw a new polygon with the polygon tool → fill in the metadata form that appears below  \n"
                 "• Click any polygon on the map to edit its surge rate or deactivate it"
             )
@@ -2649,7 +2635,7 @@ elif nav.startswith("5"):
                         except Exception:
                             continue
 
-                # Classify drawings as reshapes vs new polygons
+                # AUTO-SAVE reshapes immediately; queue new draws for form below
                 _reshapes5, _new_draws5 = [], []
                 for _drw5 in drawings5:
                     if _drw5.get("geometry", {}).get("type") != "Polygon":
@@ -2669,34 +2655,20 @@ elif nav.startswith("5"):
                     else:
                         _new_draws5.append(_drw5)
 
-                # Apply button for reshaped polygons
                 if _reshapes5:
-                    st.markdown(
-                        f'<div class="sfx-ok">✏️ {len(_reshapes5)} reshaped cluster(s) + '
-                        f'{len(_new_draws5)} new polygon(s) on map.</div>', unsafe_allow_html=True
-                    )
-                    _s5_undo_col, _s5_apply_col = st.columns(2)
-                    with _s5_undo_col:
-                        if st.session_state.get("_s5_undo_stack") and st.button("↶ Undo Last Edit", key="s5_undo"):
-                            st.session_state["live_cluster_df"] = st.session_state["_s5_undo_stack"].pop()
-                            add_log("Undid last live cluster edit", "warning")
-                            st.rerun()
-                    with _s5_apply_col:
-                        if st.button("💾 Apply Vertex Edits & Refresh Map", type="primary", key="apply_s5_vertex"):
-                            _lcd5 = lcd_cur.copy()
-                            st.session_state.setdefault("_s5_undo_stack", []).append(_lcd5.copy())
-                            for (_idx5, _drw5, _co5) in _reshapes5:
-                                _nwkt5 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co5) + "))"
-                                _lcd5.at[_idx5, _wc5] = _nwkt5
-                            st.session_state["live_cluster_df"] = _lcd5
-                            st.session_state["_s5_drawings"] = []  # clear stored drawings
-                            add_log(f"Applied {len(_reshapes5)} vertex edit(s) to live clusters", "success")
-                            st.success(f"✅ Applied {len(_reshapes5)} reshape(s). Map will refresh.")
-                            st.rerun()
-                elif st.session_state.get("_s5_undo_stack"):
-                    if st.button("↶ Undo Last Edit", key="s5_undo_nodrw"):
+                    _lcd5 = lcd_cur.copy()
+                    st.session_state.setdefault("_s5_undo_stack", []).append(_lcd5.copy())
+                    for (_idx5, _drw5, _co5) in _reshapes5:
+                        _nwkt5 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co5) + "))"
+                        _lcd5.at[_idx5, _wc5] = _nwkt5
+                    st.session_state["live_cluster_df"] = _lcd5
+                    st.session_state["_s5_drawings"] = []
+                    add_log(f"Auto-saved {len(_reshapes5)} cluster reshape(s)", "success")
+                    st.rerun()
+
+                if st.session_state.get("_s5_undo_stack"):
+                    if st.button("↶ Undo Last Edit", key="s5_undo_btn"):
                         st.session_state["live_cluster_df"] = st.session_state["_s5_undo_stack"].pop()
-                        st.session_state["_s5_drawings"] = []
                         add_log("Undid last live cluster edit", "warning")
                         st.rerun()
 
