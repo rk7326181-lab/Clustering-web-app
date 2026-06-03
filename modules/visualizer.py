@@ -871,15 +871,23 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
                 f"<br><i>Idx: {idx}</i>"
             )
 
-            # Use GeoJson so interior rings (donut holes) are rendered correctly
-            folium.GeoJson(
-                shapely_mapping(poly),
-                style_function=lambda x, hc=hub_color: {
-                    "fillColor": hc, "color": hc, "weight": 2.5, "fillOpacity": 0.35,
-                },
-                popup=folium.Popup(popup_html, max_width=280),
-                tooltip=f"{cc} — ₹{desc}",
-            ).add_to(fg)
+            # Use folium.Polygon (→ L.polygon) so Leaflet-Draw can edit vertices.
+            # folium.GeoJson wraps layers in L.geoJSON which Leaflet-Draw cannot edit.
+            parts = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+            for part in parts:
+                exterior = [[pt[1], pt[0]] for pt in part.exterior.coords]
+                holes = [[[pt[1], pt[0]] for pt in ring.coords] for ring in part.interiors]
+                locations = [exterior] + holes if holes else exterior
+                folium.Polygon(
+                    locations=locations,
+                    popup=folium.Popup(popup_html, max_width=280),
+                    tooltip=f"{cc} — ₹{desc}",
+                    color=hub_color,
+                    weight=2.5,
+                    fill=True,
+                    fill_color=hub_color,
+                    fill_opacity=0.35,
+                ).add_to(fg)
         except Exception:
             continue
 
@@ -965,14 +973,22 @@ def create_editable_live_cluster_map(lcd, lhd=None, hub_filter=None, satellite=F
                 f"<br><i>Idx: {idx}</i>"
             )
 
-            folium.GeoJson(
-                shapely_mapping(poly),
-                style_function=lambda x, hc=hub_color: {
-                    "fillColor": hc, "color": hc, "weight": 2.5, "fillOpacity": 0.35,
-                },
-                popup=folium.Popup(popup_html, max_width=280),
-                tooltip=f"{code} — ₹{surge:.0f}",
-            ).add_to(fg)
+            # Use folium.Polygon (→ L.polygon) so Leaflet-Draw can edit vertices
+            parts = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+            for part in parts:
+                exterior = [[pt[1], pt[0]] for pt in part.exterior.coords]
+                holes = [[[pt[1], pt[0]] for pt in ring.coords] for ring in part.interiors]
+                locations = [exterior] + holes if holes else exterior
+                folium.Polygon(
+                    locations=locations,
+                    popup=folium.Popup(popup_html, max_width=280),
+                    tooltip=f"{code} — ₹{surge:.0f}",
+                    color=hub_color,
+                    weight=2.5,
+                    fill=True,
+                    fill_color=hub_color,
+                    fill_opacity=0.35,
+                ).add_to(fg)
         except Exception:
             continue
 

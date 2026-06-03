@@ -2020,7 +2020,13 @@ elif nav.startswith("4"):
             hub_type = "All Types"
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
         if edit_mode_s4:
-            st.info("Edit Mode ON — drag polygon vertices to reshape, draw new polygons, or click a polygon to edit its rate/name/delete it.")
+            st.info(
+                "**Edit Mode ON** — existing polygons are now editable:  \n"
+                "• Click the **✏ Edit icon** (left toolbar) → drag any vertex to reshape  \n"
+                "• Click **✓ Save** on the toolbar when done, then hit **💾 Apply Edits & Refresh Map**  \n"
+                "• Draw a new polygon with the polygon tool  \n"
+                "• Click any polygon on the map to edit its surge rate, cluster code, or delete it"
+            )
         try:
             import folium
             from streamlit_folium import st_folium
@@ -2486,7 +2492,20 @@ elif nav.startswith("5"):
             edit_mode_s5 = st.toggle("Edit Mode", key="s5_edit_mode", value=False)
 
         if edit_mode_s5:
-            st.info("Edit Mode ON — click a cluster polygon on the map to edit its surge rate or delete it.")
+            st.info(
+                "**Edit Mode ON** — existing cluster polygons are now editable:  \n"
+                "• Click the **✏ Edit icon** (left toolbar) → drag any vertex to reshape a cluster boundary  \n"
+                "• Click **✓ Save** on the toolbar when done, then hit **💾 Apply Vertex Edits & Refresh Map**  \n"
+                "• Draw a new polygon with the polygon tool → fill in the metadata form that appears below  \n"
+                "• Click any polygon on the map to edit its surge rate or deactivate it"
+            )
+        if flt is None or len(flt) == 0:
+            st.markdown(
+                '<div class="sfx-warn">⚠️ No live cluster data loaded. '
+                'Go to the top of this page → click <b>Fetch Live Clusters from BigQuery</b>. '
+                'You need an active BigQuery connection (green badge in sidebar).</div>',
+                unsafe_allow_html=True,
+            )
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
 
         try:
