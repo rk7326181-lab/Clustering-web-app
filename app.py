@@ -598,6 +598,16 @@ for label, done in steps:
     icon = "✓" if done else "○"
     st.sidebar.markdown(f'<div class="sfx-status {cls}"><span class="icon">{icon}</span><span class="lbl">{label}</span></div>', unsafe_allow_html=True)
 
+# ── Scheduled Refresh Status (sidebar badge) ──
+if st.session_state.get("sched_refresh_enabled"):
+    _sh = st.session_state.get("sched_hour", 9)
+    _sm = st.session_state.get("sched_min", 0)
+    st.sidebar.markdown(
+        f'<div class="sfx-badge sfx-badge--ok" style="margin:4px 0"><span class="dot"></span>'
+        f'Auto-Refresh: {_sh:02d}:{_sm:02d} IST daily</div>',
+        unsafe_allow_html=True,
+    )
+
 # ── Clear Cache Button ──
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 if st.sidebar.button("Clear All Cache", key="clear_cache"):
@@ -1537,7 +1547,7 @@ elif nav.startswith("3"):
 
         st.markdown('<div class="sfx-header">Map</div>', unsafe_allow_html=True)
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
-        _s3mc1, _s3mc2, _s3mc3 = st.columns([2, 1, 1])
+        _s3mc1, _s3mc2, _s3mc3, _s3mc4 = st.columns([2, 1, 1, 1])
         with _s3mc1:
             edit_polygons = st.toggle(
                 "🎨 Edit Polygons (Reshape / Draw / Delete)",
@@ -1550,6 +1560,8 @@ elif nav.startswith("3"):
         with _s3mc3:
             s3_viz_mode = st.radio("View Mode", ["Default", "Burn"], horizontal=True, key="s3_viz_mode",
                                    help="Burn: color polygons by financial burn (requires AWB data from Step 4)")
+        with _s3mc4:
+            s3_show_rate_labels = st.checkbox("Show Rate Labels", value=True, key="s3_show_rate_labels")
         if edit_polygons and hub_filter == "All Hubs":
             st.warning("⚠️ Select a single hub from the filter above to enable editing. Editing is disabled for 'All Hubs' view.")
             edit_polygons = False
@@ -1710,6 +1722,7 @@ elif nav.startswith("3"):
                 html = create_polygon_map_cached(
                     _df_hash(pdf), _df_hash(cdf), _df_hash(_s3_awb),
                     pdf, cdf, _s3_awb, False, _s3_vm, hub_filter, s3_rate_filter, None,
+                    s3_show_rate_labels,
                 )
                 if html:
                     components.html(html, height=620, scrolling=False)
@@ -1784,11 +1797,27 @@ elif nav.startswith("3"):
                 st.markdown(f'<div class="sfx-ok">✅ {len(all_hubs)} images generated</div>', unsafe_allow_html=True)
             except Exception as e:
                 st.error(str(e))
-        for hn, path in st.session_state.get("hub_images", {}).items():
-            if os.path.exists(path):
-                with st.expander(f"{hn}"):
-                    st.image(path, use_container_width=True)
-                    st.download_button(f"Download {hn}", open(path, "rb").read(), os.path.basename(path), "image/png", key=f"di_{hn}")
+        hub_images = st.session_state.get("hub_images", {})
+        existing_hub_images = {hn: p for hn, p in hub_images.items() if os.path.exists(p)}
+        if existing_hub_images:
+            import zipfile
+            zip_buf = BytesIO()
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for hn, p in existing_hub_images.items():
+                    zf.write(p, os.path.basename(p))
+            zip_buf.seek(0)
+            st.download_button(
+                "⬇ Download All Hub Images (ZIP)",
+                zip_buf.read(),
+                "hub_images.zip",
+                "application/zip",
+                key="dl_all_hub_imgs",
+                type="primary",
+            )
+        for hn, path in existing_hub_images.items():
+            with st.expander(f"{hn}"):
+                st.image(path, use_container_width=True)
+                st.download_button(f"Download {hn}", open(path, "rb").read(), os.path.basename(path), "image/png", key=f"di_{hn}")
 
 # ═══════════════════════════════════════════════════════
 # STEP 4 — AWB + VISUALISATION
@@ -1905,7 +1934,7 @@ elif nav.startswith("4"):
             st.markdown('<div class="sfx-warn">Load polygon data first.</div>', unsafe_allow_html=True); st.stop()
         hub_col = "Hub Name" if "Hub Name" in poly.columns else "hub_name"
         hubs = poly[hub_col].unique().tolist()
-        vc1, vc2, vc3, vc4 = st.columns(4)
+        vc1, vc2, vc3, vc4, vc5 = st.columns(5)
         with vc1:
             sel_hub = st.selectbox("Hub", ["All Hubs"] + hubs, key="viz_hub")
         with vc2:
@@ -1914,6 +1943,8 @@ elif nav.startswith("4"):
             edit_mode_s4 = st.toggle("Edit Mode", key="s4_edit_mode", value=False)
         with vc4:
             rate_filter = st.selectbox("Rate Filter", ["All"] + [f"₹{i}" for i in range(0, 9)] + ["Nil"], key="viz_rate")
+        with vc5:
+            s4_show_rate_labels = st.checkbox("Show Rate Labels", value=True, key="s4_show_rate_labels")
         # Hub type filter
         lhd = st.session_state.get("live_hub_df")
         hub_type_options = ["All Types"]
@@ -1933,7 +1964,7 @@ elif nav.startswith("4"):
             from modules.visualizer import create_polygon_map, create_polygon_map_cached, _df_hash
             if edit_mode_s4:
                 # Edit mode: build fresh map for click interactivity
-                m = create_polygon_map(poly, cdf, rdf, satellite=False, viz_mode=viz_mode.lower(), hub_filter=sel_hub, rate_filter=rate_filter)
+                m = create_polygon_map(poly, cdf, rdf, satellite=False, viz_mode=viz_mode.lower(), hub_filter=sel_hub, rate_filter=rate_filter, show_rate_labels=s4_show_rate_labels)
                 from folium.plugins import Draw
                 Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)
                 map_out_s4 = st_folium(m, width=None, height=700) if m else None
@@ -1942,6 +1973,7 @@ elif nav.startswith("4"):
                 html = create_polygon_map_cached(
                     _df_hash(poly), _df_hash(cdf), _df_hash(rdf),
                     poly, cdf, rdf, False, viz_mode.lower(), sel_hub, rate_filter, None,
+                    s4_show_rate_labels,
                 )
                 if html:
                     components.html(html, height=720, scrolling=False)
@@ -2046,6 +2078,88 @@ elif nav.startswith("5"):
         year = st.number_input("Year", 2020, 2030, datetime.now().year, key="lc_yr")
     with lc2:
         month = st.number_input("Month", 1, 12, datetime.now().month, key="lc_mn")
+
+    # ── Scheduled Auto-Refresh ────────────────────────────────
+    with st.expander("⏰ Schedule Auto-Refresh", expanded=st.session_state.get("sched_refresh_enabled", False)):
+        import pytz as _pytz
+        _ist = _pytz.timezone("Asia/Kolkata")
+        _now_ist = datetime.now(_ist)
+
+        _sched_enabled = st.toggle(
+            "Enable Scheduled Refresh",
+            value=st.session_state.get("sched_refresh_enabled", False),
+            key="sched_toggle",
+            help="Auto-fetches BigQuery data at the configured IST time every day.",
+        )
+        st.session_state["sched_refresh_enabled"] = _sched_enabled
+
+        _sh1, _sh2, _sh3 = st.columns(3)
+        with _sh1:
+            _sched_hour = st.number_input(
+                "Hour (IST)", 0, 23,
+                value=st.session_state.get("sched_hour", 9),
+                key="sched_hr",
+            )
+        with _sh2:
+            _sched_min = st.number_input(
+                "Minute", 0, 59,
+                value=st.session_state.get("sched_min", 0),
+                step=5,
+                key="sched_mn",
+            )
+        with _sh3:
+            _poll_interval_min = st.selectbox(
+                "Poll every",
+                [1, 2, 5, 10, 15, 30],
+                index=2,
+                key="sched_poll_interval",
+                format_func=lambda x: f"{x} min",
+            )
+        st.session_state["sched_hour"] = _sched_hour
+        st.session_state["sched_min"] = _sched_min
+
+        _next_run = _now_ist.replace(hour=_sched_hour, minute=_sched_min, second=0, microsecond=0)
+        if _next_run <= _now_ist:
+            _next_run = _next_run.replace(day=_now_ist.day) + __import__("datetime").timedelta(days=1)
+        st.caption(f"Next scheduled fetch: **{_next_run.strftime('%Y-%m-%d %H:%M IST')}** — polls every **{_poll_interval_min} min**")
+
+        if _sched_enabled:
+            # Poll timer — causes Streamlit to rerun every N minutes so schedule is checked
+            try:
+                from streamlit_autorefresh import st_autorefresh
+                st_autorefresh(interval=_poll_interval_min * 60 * 1000, key="sched_poll_ticker")
+            except ImportError:
+                st.warning("Install `streamlit-autorefresh` (`pip install streamlit-autorefresh`) to enable polling.")
+
+            # Check if we've already run today at/after the scheduled time
+            _today_str = _now_ist.strftime("%Y-%m-%d")
+            _last_sched_date = st.session_state.get("last_sched_run_date", "")
+            _past_time = (_now_ist.hour, _now_ist.minute) >= (_sched_hour, _sched_min)
+
+            if _past_time and _last_sched_date != _today_str:
+                st.session_state["last_sched_run_date"] = _today_str
+                st.info(f"⏰ Scheduled refresh triggered at {_now_ist.strftime('%H:%M IST')}…")
+                from modules.bigquery_client import fetch_live_clusters, fetch_hub_locations
+                _t0 = time.time()
+                with st.spinner("Scheduled fetch: live clusters…"):
+                    _cd, _e1 = fetch_live_clusters(bq_client, force_refresh=True)
+                    _hd, _e2 = fetch_hub_locations(bq_client, year, month)
+                if _e1:
+                    st.error(f"Scheduled fetch error (clusters): {_e1}")
+                    add_log(f"Scheduled fetch failed: {_e1}", "error")
+                elif _e2:
+                    st.error(f"Scheduled fetch error (hubs): {_e2}")
+                    add_log(f"Scheduled fetch (hubs) failed: {_e2}", "error")
+                else:
+                    st.session_state["live_cluster_df"] = _cd
+                    st.session_state["live_hub_df"] = _hd
+                    st.session_state["last_refresh_time"] = datetime.now()
+                    add_log(f"Scheduled refresh done: {len(_cd)} clusters in {time.time()-_t0:.1f}s", "success")
+                    st.success(f"✅ Scheduled refresh complete — {len(_cd)} clusters fetched.")
+                st.rerun()
+            elif _sched_enabled:
+                _mins_left = int((_next_run - _now_ist).total_seconds() / 60)
+                st.caption(f"⏳ Next refresh in **~{_mins_left} min**. Last auto-run: {_last_sched_date or 'never'}.")
 
     if st.button("Refresh Live Clusters", type="primary", key="lc_fetch"):
         from modules.bigquery_client import fetch_live_clusters, fetch_hub_locations
@@ -2178,99 +2292,57 @@ elif nav.startswith("5"):
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
 
         try:
-            from modules.map_renderer import MapRenderer
-            renderer = MapRenderer()
-
-            # Prepare cluster dataframe in the format MapRenderer expects
-            map_cluster_df = flt.copy()
-            if "boundary" not in map_cluster_df.columns and "Polygon WKT" in map_cluster_df.columns:
-                map_cluster_df["boundary"] = map_cluster_df["Polygon WKT"]
-
-            # Parse geometry and centroids for map rendering
-            from modules.data_loader import DataLoader
-            loader = DataLoader()
-            try:
-                map_cluster_df = loader.process_data(map_cluster_df, lhd if lhd is not None else pd.DataFrame(columns=["id", "name", "latitude", "longitude"]))
-            except Exception:
-                # If process_data fails (missing columns), add geometry manually
-                from shapely import wkt as shapely_wkt
-                if "geometry" not in map_cluster_df.columns and "boundary" in map_cluster_df.columns:
-                    geoms, clats, clons = [], [], []
-                    for _, r in map_cluster_df.iterrows():
-                        try:
-                            g = shapely_wkt.loads(str(r["boundary"]))
-                            geoms.append(g)
-                            clats.append(g.centroid.y)
-                            clons.append(g.centroid.x)
-                        except Exception:
-                            geoms.append(None)
-                            clats.append(None)
-                            clons.append(None)
-                    map_cluster_df["geometry"] = geoms
-                    map_cluster_df["center_lat"] = clats
-                    map_cluster_df["center_lon"] = clons
-                if "rate_category" not in map_cluster_df.columns:
-                    # Coerce surge_amount to numeric and fill NaN so comparisons don't silently fail
-                    _sa = pd.to_numeric(map_cluster_df.get("surge_amount", 0), errors="coerce").fillna(0)
-                    map_cluster_df["rate_category"] = _sa.apply(
-                        lambda x: "₹0 (Base)" if x == 0 else ("₹1-₹3 (Low)" if x <= 3 else ("₹4-₹6 (Medium)" if x <= 6 else ("₹7-₹10 (High)" if x <= 10 else "₹11+ (Very High)")))
-                    )
-
-            # Normalize hub_df column names so MapRenderer finds 'id', 'name', 'latitude', 'longitude'
-            map_hub_df = lhd.copy() if lhd is not None else pd.DataFrame()
-            if not map_hub_df.empty:
-                rename_map = {}
-                if "id" not in map_hub_df.columns and "hub_id" in map_hub_df.columns:
-                    rename_map["hub_id"] = "id"
-                if "name" not in map_hub_df.columns and "hub_name" in map_hub_df.columns:
-                    rename_map["hub_name"] = "name"
-                if rename_map:
-                    map_hub_df = map_hub_df.rename(columns=rename_map)
-
-            # Empty-data guard
-            if map_cluster_df.empty or "geometry" not in map_cluster_df.columns:
-                st.warning("No cluster geometry available to render. Fetch live clusters first.")
-                st.stop()
-
-            map_obj = renderer.create_cluster_map(
-                map_cluster_df,
-                map_hub_df,
-                show_rate_labels=show_labels,
-                show_hub_markers=show_hubs,
-                selected_hub=None if f_hub == "All" else f_hub
+            import streamlit.components.v1 as components
+            from modules.visualizer import (
+                create_live_cluster_map,
+                create_live_cluster_map_cached,
+                _df_hash,
             )
 
-            # Add fullscreen + measure controls + layer control
-            try:
-                from folium.plugins import Fullscreen, MeasureControl
-                from modules.visualizer import OsrmRouteDistanceTool
-                Fullscreen(position="topright", title="Full Screen",
-                           title_cancel="Exit Full Screen", force_separate_button=True).add_to(map_obj)
-                MeasureControl(position="topleft", primary_length_unit="kilometers").add_to(map_obj)
-                if OsrmRouteDistanceTool._template is not None:
-                    OsrmRouteDistanceTool().add_to(map_obj)
-                # Add tile layers for satellite/terrain switching
-                import folium as fol
-                fol.TileLayer(
-                    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-                    attr="Esri", name="Satellite", overlay=False, control=True
-                ).add_to(map_obj)
-                fol.TileLayer(
-                    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-                    attr="Esri", name="Terrain", overlay=False, control=True
-                ).add_to(map_obj)
-                fol.LayerControl(position="topright", collapsed=False).add_to(map_obj)
-            except Exception:
-                pass
+            # Single-hub filter value for cache key + function
+            _s5_hub = f_hubs[0] if len(f_hubs) == 1 else "All Hubs"
 
             if edit_mode_s5:
+                # Edit/Draw mode — live folium object so st_folium returns click coords
+                m5 = create_live_cluster_map(
+                    flt, lhd,
+                    hub_filter=_s5_hub,
+                    rate_range=(min_rate, max_rate),
+                    hub_type=f_type,
+                    show_labels=show_labels,
+                    show_hubs=show_hubs,
+                )
+                if m5 is None:
+                    st.warning("No cluster geometry to render. Make sure BQ data includes polygon boundaries.")
+                    st.stop()
                 from folium.plugins import Draw
-                Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(map_obj)
+                Draw(
+                    export=True, position="topleft",
+                    draw_options={
+                        "polyline": False,
+                        "polygon": {"shapeOptions": {"color": "#0B8A7A", "fillOpacity": 0.25}},
+                        "circle": False, "rectangle": True,
+                        "marker": True, "circlemarker": False,
+                    }
+                ).add_to(m5)
+                from streamlit_folium import st_folium
+                map_out_step5 = st_folium(m5, width="100%", height=700)
+            else:
+                # Non-edit mode — cached HTML for fast render (same as Step 4 Hub Visualisation Map)
+                _lhd_hash = _df_hash(lhd) if lhd is not None else "none"
+                html5 = create_live_cluster_map_cached(
+                    _df_hash(flt), _lhd_hash,
+                    _s5_hub, (min_rate, max_rate), f_type,
+                    show_labels, show_hubs,
+                    flt, lhd,
+                )
+                if html5:
+                    components.html(html5, height=720, scrolling=False)
+                else:
+                    st.warning("No cluster geometry to render. Fetch live clusters first — BigQuery data must include a `boundary` (WKT) column.")
+                map_out_step5 = None
 
-            from streamlit_folium import st_folium
-            map_out_step5 = st_folium(map_obj, width="100%", height=680)
-
-            # Click-to-edit live cluster on map
+            # ── Click handlers (edit mode only, st_folium required) ──────────
             if edit_mode_s5 and map_out_step5 and map_out_step5.get("last_clicked"):
                 from shapely.geometry import Point as Pt5
                 from shapely.wkt import loads as wl5
@@ -2279,20 +2351,26 @@ elif nav.startswith("5"):
                 if lcd_edit is not None and "boundary" in lcd_edit.columns:
                     for idx, row in lcd_edit.iterrows():
                         try:
-                            poly_g = wl5(str(row.get("boundary", "")))
-                            if click_pt5.within(poly_g):
-                                st.markdown(f'''<div class="sfx-card" style="border-left:4px solid #0B8A7A">
-                                    <b>Editing: {row.get("cluster_code", "")}</b> — Hub: {row.get("hub_name", "")}<br>
-                                    Current Rate: ₹{row.get("surge_amount", 0)} | Pincode: {row.get("pincode", "")} | Category: {row.get("cluster_category", "")}
-                                </div>''', unsafe_allow_html=True)
+                            if click_pt5.within(wl5(str(row.get("boundary", "")))):
+                                st.markdown(
+                                    f'<div class="sfx-card" style="border-left:4px solid #0B8A7A">'
+                                    f'<b>Editing: {row.get("cluster_code","")}</b> — Hub: {row.get("hub_name","")}<br>'
+                                    f'Rate: ₹{row.get("surge_amount",0)} | Pincode: {row.get("pincode","")} | '
+                                    f'Category: {row.get("cluster_category","")}</div>',
+                                    unsafe_allow_html=True,
+                                )
                                 with st.form(key=f"s5_map_edit_{idx}"):
-                                    new_surge = st.number_input("New Surge Rate (₹)", value=float(row.get("surge_amount", 0)), step=0.5, key=f"s5_surge_{idx}")
+                                    new_surge = st.number_input(
+                                        "New Surge Rate (₹)",
+                                        value=float(row.get("surge_amount", 0)),
+                                        step=0.5, key=f"s5_surge_{idx}",
+                                    )
                                     col_save5, col_del5 = st.columns(2)
                                     with col_save5:
                                         if st.form_submit_button("Save Rate Change", type="primary"):
                                             lcd_edit.at[idx, "surge_amount"] = new_surge
                                             st.session_state["live_cluster_df"] = lcd_edit
-                                            add_log(f"Updated {row['cluster_code']} surge to ₹{new_surge}", "success")
+                                            add_log(f"Updated {row['cluster_code']} surge → ₹{new_surge}", "success")
                                             st.rerun()
                                     with col_del5:
                                         if st.form_submit_button("Deactivate Cluster"):
@@ -2304,33 +2382,8 @@ elif nav.startswith("5"):
                                 break
                         except Exception:
                             continue
-            elif map_out_step5 and map_out_step5.get("last_clicked"):
-                # Info-only click (not in edit mode)
-                from shapely.geometry import Point as Pt5i
-                from shapely.wkt import loads as wl5i
-                click_pt5i = Pt5i(map_out_step5["last_clicked"]["lng"], map_out_step5["last_clicked"]["lat"])
-                lcd_info = st.session_state.get("live_cluster_df")
-                if lcd_info is not None and "boundary" in lcd_info.columns:
-                    for _, row in lcd_info.iterrows():
-                        try:
-                            if click_pt5i.within(wl5i(str(row.get("boundary", "")))):
-                                rdf_check = st.session_state.get("final_result_df")
-                                burn_val = saving_val = "N/A"
-                                if rdf_check is not None and "Burning" in rdf_check.columns:
-                                    pc_rdf = rdf_check[rdf_check["pincode"].astype(str) == str(row.get("pincode", ""))]
-                                    if len(pc_rdf) > 0:
-                                        burn_val = f"₹{pc_rdf['Burning'].sum():,.0f}"
-                                        saving_val = f"₹{pc_rdf['Saving'].sum():,.0f}"
-                                st.markdown(f'''<div class="sfx-card">
-                                    <b>{row.get("cluster_code", "—")}</b> — {row.get("hub_name", "—")}<br>
-                                    Rate: ₹{row.get("surge_amount", "—")} | Category: {row.get("cluster_category", "—")}<br>
-                                    Pincode: {row.get("pincode", "—")} | Burn: {burn_val} | Saving: {saving_val}
-                                </div>''', unsafe_allow_html=True)
-                                break
-                        except Exception:
-                            continue
 
-            # Handle drawn polygons — let user name new clusters
+            # ── Drawn polygons — name & save new cluster ──────────────────────
             if edit_mode_s5 and map_out_step5 and map_out_step5.get("all_drawings"):
                 for drawing in map_out_step5["all_drawings"]:
                     if drawing.get("geometry", {}).get("type") == "Polygon":
@@ -2339,12 +2392,12 @@ elif nav.startswith("5"):
                             dc1, dc2 = st.columns(2)
                             with dc1:
                                 new_code = st.text_input("Cluster Code", key="s5_drawn_code")
-                                new_hub = st.text_input("Hub Name", key="s5_drawn_hub")
-                                new_pin = st.text_input("Pincode", key="s5_drawn_pin")
+                                new_hub  = st.text_input("Hub Name",     key="s5_drawn_hub")
+                                new_pin  = st.text_input("Pincode",      key="s5_drawn_pin")
                             with dc2:
                                 new_rate = st.number_input("Surge Rate (₹)", min_value=0.0, step=0.5, key="s5_drawn_rate")
-                                new_cat = st.text_input("Category (e.g. Rs.4)", key="s5_drawn_cat")
-                                new_desc = st.text_input("Description", key="s5_drawn_desc")
+                                new_cat  = st.text_input("Category (e.g. Rs.4)", key="s5_drawn_cat")
+                                new_desc = st.text_input("Description",  key="s5_drawn_desc")
                             if st.form_submit_button("Save New Cluster", type="primary"):
                                 coords = drawing["geometry"]["coordinates"][0]
                                 wkt_str = "POLYGON((" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + "))"
@@ -2356,10 +2409,10 @@ elif nav.startswith("5"):
                                     "hub_id": "", "id": "",
                                 }
                                 lcd_draw = st.session_state.get("live_cluster_df")
-                                if lcd_draw is not None:
-                                    st.session_state["live_cluster_df"] = pd.concat([lcd_draw, pd.DataFrame([new_row])], ignore_index=True)
-                                else:
-                                    st.session_state["live_cluster_df"] = pd.DataFrame([new_row])
+                                st.session_state["live_cluster_df"] = (
+                                    pd.concat([lcd_draw, pd.DataFrame([new_row])], ignore_index=True)
+                                    if lcd_draw is not None else pd.DataFrame([new_row])
+                                )
                                 add_log(f"Created new cluster: {new_code} at ₹{new_rate}", "success")
                                 st.rerun()
                         break
@@ -2373,11 +2426,11 @@ elif nav.startswith("5"):
             st.markdown("""
             | Color | Surge Rate | Description |
             |-------|-----------|-------------|
-            | Gray | ₹0 | Base rate — no surcharge |
-            | Blue | ₹1–₹3 | Low surcharge zone |
-            | Yellow | ₹4–₹6 | Medium surcharge zone |
-            | Orange | ₹7–₹10 | High surcharge zone |
-            | Red | ₹11+ | Very high surcharge zone |
+            | 🔘 Gray | ₹0 | Base rate — no surcharge |
+            | 🔵 Light Blue | ₹1–₹3 | Low surcharge zone |
+            | 🔷 Dark Blue | ₹4–₹6 | Medium surcharge zone |
+            | 🟠 Orange | ₹7–₹10 | High surcharge zone |
+            | 🔴 Red | ₹11+ | Very high surcharge zone |
 
             - **Red triangles** = Hub locations
             - **Click any polygon** to view cluster details

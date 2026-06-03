@@ -160,12 +160,13 @@ def _df_hash(df):
 @st.cache_data(ttl=600, show_spinner=False)
 def create_polygon_map_cached(poly_hash, cluster_hash, awb_hash,
                                _polygon_df, _cluster_df, _awb_df,
-                               satellite, viz_mode, hub_filter, rate_filter, hub_type_filter):
+                               satellite, viz_mode, hub_filter, rate_filter, hub_type_filter,
+                               show_rate_labels=True):
     """Cached wrapper — returns Folium map HTML string for non-edit mode rendering.
 
     The hash strings are the cache key; DataFrames are prefixed with _ to skip hashing.
     """
-    m = create_polygon_map(_polygon_df, _cluster_df, _awb_df, satellite, viz_mode, hub_filter, rate_filter, hub_type_filter)
+    m = create_polygon_map(_polygon_df, _cluster_df, _awb_df, satellite, viz_mode, hub_filter, rate_filter, hub_type_filter, show_rate_labels=show_rate_labels)
     if m is None:
         return None
     return m._repr_html_()
@@ -208,7 +209,7 @@ def _base_map(center_lat, center_lon, zoom=9, satellite=False, draw_enabled=Fals
 
 
 def _add_surge_legend(map_obj):
-    """Add payout rate legend to map"""
+    """Add collapsible payout rate legend to map"""
     legend_html = '''
     <div style="
         position: fixed;
@@ -218,16 +219,17 @@ def _add_surge_legend(map_obj):
         background-color: white;
         border: 2px solid #d1d5db;
         border-radius: 8px;
-        padding: 12px;
+        padding: 10px 12px;
         font-family: Arial, sans-serif;
         font-size: 12px;
         z-index: 9999;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     ">
-        <h4 style="margin: 0 0 8px 0; font-size: 13px; color: #1f2937; border-bottom: 2px solid #0B8A7A; padding-bottom: 4px;">
-            Payout Rate Legend
-        </h4>
-        <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+            <span style="font-size:13px;font-weight:700;color:#1f2937;border-bottom:2px solid #0B8A7A;padding-bottom:3px;flex:1">Payout Rate Legend</span>
+            <button onclick="var b=document.getElementById('_surge_legend_body');var v=b.style.display!=='none';b.style.display=v?'none':'flex';this.textContent=v?'+':'−'" style="background:none;border:1px solid #9ca3af;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:13px;font-weight:700;color:#6b7280;margin-left:6px;line-height:1.3">−</button>
+        </div>
+        <div id="_surge_legend_body" style="display:flex;flex-direction:column;gap:4px">
             <div style="display: flex; align-items: center;">
                 <div style="width: 20px; height: 14px; background-color: #22c55e; margin-right: 6px; border: 1px solid #16a34a; border-radius: 2px;"></div>
                 <span>₹0 (0-5 km)</span>
@@ -258,7 +260,7 @@ def _add_surge_legend(map_obj):
     map_obj.get_root().html.add_child(folium.Element(legend_html))
 
 
-def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False, viz_mode="none", hub_filter=None, rate_filter=None, hub_type_filter=None):
+def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False, viz_mode="none", hub_filter=None, rate_filter=None, hub_type_filter=None, show_rate_labels=True):
     if not HAS_FOLIUM: return None
     if polygon_df is None or len(polygon_df) == 0:
         return None
@@ -306,6 +308,10 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
     if awb_df is not None and len(awb_df) > 0:
         adf = awb_df.copy(); adf.columns = adf.columns.str.strip().str.lower()
         ship_counts = adf.groupby("cluster_name").size().to_dict()
+
+    # FeatureGroups for clean LayerControl
+    rate_label_fg = folium.FeatureGroup(name="Rate Labels", show=show_rate_labels)
+    hub_fg = folium.FeatureGroup(name="Hub Markers", show=True)
 
     for _, row in df.iterrows():
         try:
@@ -368,11 +374,13 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
                         f'box-shadow:0 1px 4px rgba(0,0,0,0.2);text-align:center;">{label}</div>'
                     ),
                     icon_size=(80, 28), icon_anchor=(40, 14)),
-            ).add_to(m)
+            ).add_to(rate_label_fg)
         except Exception as e:
             import traceback
             print(f"Polygon render error for {row.get('Cluster_Code', '?')}: {e}")
             continue
+
+    rate_label_fg.add_to(m)
 
     # Hub markers
     if cluster_df is not None:
@@ -398,7 +406,8 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
                         f'font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);font-weight:700;line-height:30px;text-align:center;">&#127968;</div>'
                     ),
                     icon_size=(30, 30), icon_anchor=(15, 15)),
-            ).add_to(m)
+            ).add_to(hub_fg)
+    hub_fg.add_to(m)
 
     # Shipment heatmap
     if awb_df is not None and len(awb_df) > 0 and viz_mode in ("heatmap", "dots"):
@@ -435,11 +444,11 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
     ).add_to(m)
     if OsrmRouteDistanceTool._template is not None:
         OsrmRouteDistanceTool().add_to(m)
-    folium.LayerControl(position="topright", collapsed=False).add_to(m)
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
 
     _add_surge_legend(m)
 
-    # Pincode color legend (bottom-left, scrollable)
+    # Pincode color legend (bottom-left, scrollable, collapsible)
     if pincode_colors:
         legend_items = ""
         shown_hub = hub_filter if (hub_filter and hub_filter != "All Hubs") else None
@@ -455,14 +464,266 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
                     f'<span style="font-size:10px;color:#555">{pin}</span></div>'
                 )
         if legend_items:
-            pc_legend = f'''<div style="position:fixed;bottom:50px;left:10px;max-width:180px;max-height:300px;overflow-y:auto;
-                background:rgba(255,255,255,0.95);border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;
-                font-family:Arial,sans-serif;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.12)">
-                <div style="font-size:11px;font-weight:700;color:#1f2937;border-bottom:2px solid #0B8A7A;padding-bottom:3px;margin-bottom:4px">
-                    Pincode Colors</div>{legend_items}</div>'''
+            pc_legend = (
+                '<div style="position:fixed;bottom:50px;left:10px;max-width:180px;'
+                'background:rgba(255,255,255,0.95);border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;'
+                'font-family:Arial,sans-serif;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.12)">'
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+                '<span style="font-size:11px;font-weight:700;color:#1f2937;border-bottom:2px solid #0B8A7A;padding-bottom:3px;flex:1">Pincode Colors</span>'
+                '<button onclick="var b=document.getElementById(\'_pc_legend_body\');var v=b.style.display!==\'none\';b.style.display=v?\'none\':\'block\';this.textContent=v?\'+\':\'−\'" '
+                'style="background:none;border:1px solid #9ca3af;border-radius:3px;padding:1px 5px;cursor:pointer;font-size:12px;font-weight:700;color:#6b7280;margin-left:5px;line-height:1.3">−</button>'
+                '</div>'
+                f'<div id="_pc_legend_body" style="max-height:260px;overflow-y:auto">{legend_items}</div>'
+                '</div>'
+            )
             m.get_root().html.add_child(folium.Element(pc_legend))
 
     return m
+
+
+# ── Network Distribution Map — live cluster visualization ───────────────────
+
+_SURGE_TIER_COLORS = [
+    (0,   0,   "#6b7280"),   # ₹0  — Gray      (Base)
+    (1,   3,   "#60a5fa"),   # ₹1–3  — Light Blue (Low)
+    (4,   6,   "#2563eb"),   # ₹4–6  — Dark Blue  (Medium)
+    (7,   10,  "#f97316"),   # ₹7–10 — Orange     (High)
+    (11,  999, "#ef4444"),   # ₹11+  — Red        (Very High)
+]
+
+
+def _surge_color(amount):
+    """Map a numeric surge amount to the Network Distribution Map color tier."""
+    v = float(amount or 0)
+    for lo, hi, color in _SURGE_TIER_COLORS:
+        if lo <= v <= hi:
+            return color
+    return "#6b7280"
+
+
+def _add_live_cluster_legend(map_obj):
+    """Fixed-position collapsible legend matching the Network Distribution Map surge tiers."""
+    rows = ""
+    tiers = [
+        ("#6b7280", "₹0 — Base"),
+        ("#60a5fa", "₹1–₹3 — Low"),
+        ("#2563eb", "₹4–₹6 — Medium"),
+        ("#f97316", "₹7–₹10 — High"),
+        ("#ef4444", "₹11+ — Very High"),
+    ]
+    for clr, lbl in tiers:
+        rows += (
+            f'<div style="display:flex;align-items:center;gap:6px;padding:2px 0">'
+            f'<div style="width:16px;height:12px;background:{clr};border-radius:2px;'
+            f'border:1px solid rgba(0,0,0,.15)"></div>'
+            f'<span style="font-size:11px">{lbl}</span></div>'
+        )
+    hub_row = (
+        '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;padding-top:4px;'
+        'border-top:1px solid #e5e7eb">'
+        '<span style="font-size:16px;color:#e74c3c">🏠</span>'
+        '<span style="font-size:11px">Hub Location</span></div>'
+    )
+    legend = (
+        '<div style="position:fixed;bottom:50px;right:50px;background:rgba(255,255,255,0.96);'
+        'border:1.5px solid #d1d5db;border-radius:8px;padding:10px 14px;'
+        'font-family:Arial,sans-serif;z-index:9999;box-shadow:0 4px 10px rgba(0,0,0,.12)">'
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">'
+        '<span style="font-size:12px;font-weight:700;color:#1f2937;border-bottom:2px solid #0B8A7A;padding-bottom:3px;flex:1">Surge Rate Legend</span>'
+        '<button onclick="var b=document.getElementById(\'_live_legend_body\');var v=b.style.display!==\'none\';b.style.display=v?\'none\':\'block\';this.textContent=v?\'+\':\'−\'" '
+        'style="background:none;border:1px solid #9ca3af;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:13px;font-weight:700;color:#6b7280;margin-left:6px;line-height:1.3">−</button>'
+        '</div>'
+        f'<div id="_live_legend_body">{rows}{hub_row}</div>'
+        '</div>'
+    )
+    map_obj.get_root().html.add_child(folium.Element(legend))
+
+
+def create_live_cluster_map(lcd, lhd=None, hub_filter=None, rate_range=(0, 14),
+                             hub_type=None, show_labels=True, show_hubs=True):
+    """Interactive Folium map for live BigQuery cluster data.
+
+    Polygons are colored by surge rate using the same tier scheme as the
+    Network Distribution Map: gray=₹0, light-blue=₹1–3, dark-blue=₹4–6,
+    orange=₹7–10, red=₹11+.
+
+    lcd: DataFrame with columns  boundary|Polygon WKT (WKT), hub_name, surge_amount,
+         cluster_code, pincode, cluster_category
+    lhd: Optional hub-locations DataFrame (hub_name/name, hub_lat/latitude, hub_long/longitude)
+    """
+    if not HAS_FOLIUM:
+        return None
+    if lcd is None or len(lcd) == 0:
+        return None
+
+    df = lcd.copy()
+    df.columns = df.columns.str.strip().str.lower()
+
+    # Identify geometry column
+    wkt_col = (
+        "boundary"    if "boundary"    in df.columns else
+        "polygon wkt" if "polygon wkt" in df.columns else
+        None
+    )
+    if not wkt_col:
+        return None
+
+    # Normalise surge_amount to numeric
+    df["surge_amount"] = pd.to_numeric(df.get("surge_amount", 0), errors="coerce").fillna(0)
+
+    # Apply hub filter
+    if hub_filter and hub_filter not in ("All Hubs", "All", None):
+        df = df[df["hub_name"] == hub_filter]
+
+    # Apply surge rate range filter
+    lo, hi = float(rate_range[0]), float(rate_range[1])
+    df = df[(df["surge_amount"] >= lo) & (df["surge_amount"] <= hi)]
+
+    # Compute map center from polygon centroids
+    lats, lons = [], []
+    for wkt in df[wkt_col].dropna().head(100):
+        try:
+            p = wkt_loads(str(wkt))
+            lats.append(p.centroid.y)
+            lons.append(p.centroid.x)
+        except Exception:
+            pass
+    center_lat = float(np.mean(lats)) if lats else 20.59
+    center_lon = float(np.mean(lons)) if lons else 78.96
+
+    m = _base_map(center_lat, center_lon)
+
+    # FeatureGroups for clean LayerControl
+    rate_label_fg = folium.FeatureGroup(name="Rate Labels", show=show_labels)
+    hub_fg = folium.FeatureGroup(name="Hub Markers", show=show_hubs)
+
+    for _, row in df.iterrows():
+        try:
+            wkt = row.get(wkt_col, "")
+            if pd.isna(wkt) or not wkt:
+                continue
+            poly = wkt_loads(str(wkt))
+            poly = poly.simplify(0.001, preserve_topology=True)
+            latlon = [[lat, lon] for lon, lat in poly.exterior.coords]
+
+            surge = float(row.get("surge_amount", 0) or 0)
+            color = _surge_color(surge)
+            hub   = row.get("hub_name", "")
+            code  = row.get("cluster_code", "")
+            pin   = str(row.get("pincode", ""))
+            cat   = row.get("cluster_category", "")
+
+            popup_html = (
+                f"<div style='font-family:sans-serif;font-size:13px'>"
+                f"<b>{code}</b><br>"
+                f"<span style='color:#6b7280'>Hub:</span> {hub}<br>"
+                f"<span style='color:#6b7280'>Pincode:</span> {pin}<br>"
+                f"<span style='color:#6b7280'>Surge:</span> "
+                f"<b style='color:{color}'>₹{surge:.0f}</b><br>"
+                f"<span style='color:#6b7280'>Category:</span> {cat}"
+                f"</div>"
+            )
+            folium.Polygon(
+                locations=latlon,
+                popup=folium.Popup(popup_html, max_width=300),
+                tooltip=f"{pin} — ₹{surge:.0f}",
+                color=color, weight=2,
+                fill=True, fill_color=color, fill_opacity=0.28,
+            ).add_to(m)
+
+            cx, cy = poly.centroid.x, poly.centroid.y
+            folium.Marker(
+                location=[cy, cx],
+                icon=folium.DivIcon(
+                    html=(
+                        f'<div style="font-size:11px;font-weight:700;'
+                        f'background:rgba(0,0,0,0.72);color:{color};'
+                        f'padding:2px 6px;border:1.5px solid {color};'
+                        f'border-radius:3px;white-space:nowrap;text-align:center;">'
+                        f'₹{surge:.0f}</div>'
+                    ),
+                    icon_size=(52, 22), icon_anchor=(26, 11),
+                ),
+            ).add_to(rate_label_fg)
+        except Exception:
+            continue
+
+    rate_label_fg.add_to(m)
+
+    # Hub markers — from lhd or fall back to coordinates in lcd
+    _hub_src = None
+    if lhd is not None and not (hasattr(lhd, "empty") and lhd.empty):
+        hdf = lhd.copy()
+        hdf.columns = hdf.columns.str.strip().str.lower()
+        _lat  = next((c for c in ["hub_lat", "latitude",  "lat"] if c in hdf.columns), None)
+        _lon  = next((c for c in ["hub_long", "hub_lon", "longitude", "lon"] if c in hdf.columns), None)
+        _nm   = next((c for c in ["hub_name", "name"] if c in hdf.columns), None)
+        if _lat and _lon and _nm:
+            _hub_src = hdf[[_nm, _lat, _lon]].rename(
+                columns={_nm: "hub_name", _lat: "lat", _lon: "lon"}
+            )
+    if _hub_src is None and "hub_name" in df.columns:
+        _lc_lat = next((c for c in ["hub_lat", "latitude"] if c in df.columns), None)
+        _lc_lon = next((c for c in ["hub_long", "hub_lon", "longitude"] if c in df.columns), None)
+        if _lc_lat and _lc_lon:
+            _hub_src = df[["hub_name", _lc_lat, _lc_lon]].rename(
+                columns={_lc_lat: "lat", _lc_lon: "lon"}
+            ).dropna()
+
+    if _hub_src is not None and not _hub_src.empty:
+        if hub_filter and hub_filter not in ("All Hubs", "All", None):
+            _hub_src = _hub_src[_hub_src["hub_name"] == hub_filter]
+        for _, h in _hub_src.drop_duplicates(subset=["hub_name"]).iterrows():
+            try:
+                _hlat, _hlon = float(h["lat"]), float(h["lon"])
+                _hname = h["hub_name"]
+                folium.Marker(
+                    location=[_hlat, _hlon],
+                    popup=f"<b>{_hname}</b>",
+                    tooltip=_hname,
+                    icon=folium.DivIcon(
+                        html=(
+                            f'<div title="{_hname}"'
+                            f' onclick="if(window.osrmAddPoint){{'
+                            f'window.osrmAddPoint({_hlat},{_hlon});return false;}}"'
+                            f' style="cursor:pointer;background:#e74c3c;color:#fff;'
+                            f'border:3px solid #fff;border-radius:50%;width:30px;height:30px;'
+                            f'display:flex;align-items:center;justify-content:center;'
+                            f'font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);'
+                            f'font-weight:700;line-height:30px;text-align:center;">&#127968;</div>'
+                        ),
+                        icon_size=(30, 30), icon_anchor=(15, 15),
+                    ),
+                ).add_to(hub_fg)
+            except Exception:
+                continue
+
+    hub_fg.add_to(m)
+
+    # Auto-fit bounds to all polygons
+    if lats and lons:
+        m.fit_bounds([
+            [min(lats) - 0.02, min(lons) - 0.02],
+            [max(lats) + 0.02, max(lons) + 0.02],
+        ])
+
+    MeasureControl(position="topleft", primary_length_unit="kilometers").add_to(m)
+    if OsrmRouteDistanceTool._template is not None:
+        OsrmRouteDistanceTool().add_to(m)
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+    _add_live_cluster_legend(m)
+
+    return m
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def create_live_cluster_map_cached(lcd_hash, lhd_hash, hub_filter, rate_range, hub_type,
+                                    show_labels, show_hubs, _lcd, _lhd):
+    """Cached HTML wrapper for create_live_cluster_map (non-edit mode, fast render)."""
+    m = create_live_cluster_map(_lcd, _lhd, hub_filter, rate_range, hub_type, show_labels, show_hubs)
+    if m is None:
+        return None
+    return m._repr_html_()
 
 
 def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, satellite=False):
@@ -763,7 +1024,7 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
     ).add_to(m)
     if OsrmRouteDistanceTool._template is not None:
         OsrmRouteDistanceTool().add_to(m)
-    folium.LayerControl(position="topright", collapsed=False).add_to(m)
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
 
     _add_surge_legend(m)
 

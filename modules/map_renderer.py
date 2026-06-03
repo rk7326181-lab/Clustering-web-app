@@ -113,27 +113,39 @@ class MapRenderer:
             control_scale=True
         )
 
-        # Add cluster polygons
+        # FeatureGroups for clean LayerControl
+        rate_label_fg = folium.FeatureGroup(name="Rate Labels", show=show_rate_labels)
+        hub_fg = folium.FeatureGroup(name="Hub Markers", show=show_hub_markers)
+
+        # Add cluster polygons (rate labels go into rate_label_fg)
         for idx, row in cluster_df.iterrows():
             if pd.notna(row.get('geometry')):
-                self._add_cluster_polygon(m, row, show_rate_labels)
+                self._add_cluster_polygon(m, row, show_rate_labels, rate_label_fg)
+
+        rate_label_fg.add_to(m)
 
         # Add hub markers
         if show_hub_markers:
             relevant_hubs = hub_df[hub_df['id'].isin(cluster_df['hub_id'].unique())]
             for idx, hub in relevant_hubs.iterrows():
-                self._add_hub_marker(m, hub)
+                self._add_hub_marker(hub_fg, hub)
+
+        hub_fg.add_to(m)
 
         # Add legend
         self._add_legend(m)
 
-        # Add fullscreen button
+        # Add fullscreen button and collapsed layer control
         plugins.Fullscreen(position='topright').add_to(m)
+        folium.LayerControl(position='topright', collapsed=True).add_to(m)
 
         return m
 
-    def _add_cluster_polygon(self, map_obj, cluster_row, show_label=True):
-        """Add a single cluster polygon to the map with rate label at centroid"""
+    def _add_cluster_polygon(self, map_obj, cluster_row, show_label=True, label_fg=None):
+        """Add a single cluster polygon to the map with rate label at centroid.
+
+        label_fg: optional FeatureGroup to add rate labels to (for clean LayerControl).
+        """
         try:
             geom = cluster_row['geometry']
             surge_amount = cluster_row.get('surge_amount', 0)
@@ -199,15 +211,14 @@ class MapRenderer:
                 popup=folium.Popup(popup_html, max_width=320)
             ).add_to(map_obj)
 
-            # Add rate label at centroid
+            # Add rate label at centroid — into label_fg for clean LayerControl
             if show_label and pd.notna(cluster_row.get('center_lat')) and pd.notna(cluster_row.get('center_lon')):
-                # Format the surge amount for display
                 if surge_amount == int(surge_amount):
                     rate_text = f"₹{int(surge_amount)}"
                 else:
                     rate_text = f"₹{surge_amount:.1f}"
 
-                # Create label with better styling
+                target = label_fg if label_fg is not None else map_obj
                 folium.Marker(
                     location=[cluster_row['center_lat'], cluster_row['center_lon']],
                     icon=folium.DivIcon(html=f"""
@@ -229,12 +240,12 @@ class MapRenderer:
                             transform: translate(-50%, -50%);
                         '>{rate_text}</div>
                     """)
-                ).add_to(map_obj)
+                ).add_to(target)
 
         except Exception as e:
             print(f"Warning: Could not add polygon for cluster {cluster_row.get('cluster_code', 'unknown')}: {e}")
 
-    def _add_hub_marker(self, map_obj, hub_row):
+    def _add_hub_marker(self, map_obj_or_fg, hub_row):
         """Add a hub location marker to the map"""
         try:
             # Create custom icon (red triangle)
@@ -279,13 +290,13 @@ class MapRenderer:
                 popup=folium.Popup(popup_html, max_width=260),
                 tooltip=f"Hub: {hub_row['name']}",
                 icon=folium.DivIcon(html=f'<div style="margin-left: -15px; margin-top: -15px;">{icon_html}</div>')
-            ).add_to(map_obj)
+            ).add_to(map_obj_or_fg)
 
         except Exception as e:
             print(f"Warning: Could not add hub marker for {hub_row.get('name', 'unknown')}: {e}")
 
     def _add_legend(self, map_obj):
-        """Add color legend to the map"""
+        """Add collapsible color legend to the map"""
         legend_html = '''
         <div style="
             position: fixed;
@@ -295,16 +306,17 @@ class MapRenderer:
             background-color: white;
             border: 2px solid #d1d5db;
             border-radius: 8px;
-            padding: 12px;
+            padding: 10px 12px;
             font-family: Arial, sans-serif;
             font-size: 12px;
             z-index: 9999;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         ">
-            <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #1f2937; border-bottom: 2px solid #3b82f6; padding-bottom: 5px;">
-                Surge Rate Legend
-            </h4>
-            <div style="display: flex; flex-direction: column; gap: 6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-size:14px;font-weight:700;color:#1f2937;border-bottom:2px solid #3b82f6;padding-bottom:4px;flex:1">Surge Rate Legend</span>
+                <button onclick="var b=document.getElementById('_mr_legend_body');var v=b.style.display!=='none';b.style.display=v?'none':'flex';this.textContent=v?'+':'−'" style="background:none;border:1px solid #9ca3af;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:13px;font-weight:700;color:#6b7280;margin-left:6px;line-height:1.3">−</button>
+            </div>
+            <div id="_mr_legend_body" style="display: flex; flex-direction: column; gap: 6px;">
                 <div style="display: flex; align-items: center;">
                     <div style="width: 25px; height: 16px; background-color: #9CA3AF; margin-right: 8px; border: 1px solid #6b7280; border-radius: 2px;"></div>
                     <span style="font-weight: 500;">₹0 (Base)</span>
