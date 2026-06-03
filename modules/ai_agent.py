@@ -27,7 +27,10 @@ MODEL_FALLBACK_CHAIN = [
 
 
 def _resolve_api_key(api_key=None):
-    """Resolve Groq API key from: arg → session_state → st.secrets → env."""
+    """Resolve Groq API key from: arg → session_state → st.secrets → env.
+    Tries common case/section variants because Streamlit Cloud users put the
+    key under different names ([groq].api_key, lowercase, etc.).
+    """
     if api_key:
         return api_key
     if HAS_STREAMLIT:
@@ -37,13 +40,45 @@ def _resolve_api_key(api_key=None):
                 return sk
         except Exception:
             pass
+        # Try flat keys first
+        for name in ("GROQ_API_KEY", "groq_api_key", "GROQ_KEY", "groq_key"):
+            try:
+                sk = st.secrets.get(name, "")
+                if sk:
+                    return sk
+            except Exception:
+                pass
+        # Try [groq] section
         try:
-            sk = st.secrets.get("GROQ_API_KEY", "")
-            if sk:
-                return sk
+            section = st.secrets.get("groq", None)
+            if section:
+                for k in ("api_key", "API_KEY", "GROQ_API_KEY", "key"):
+                    sk = section.get(k, "") if hasattr(section, "get") else ""
+                    if sk:
+                        return sk
         except Exception:
             pass
-    return os.environ.get("GROQ_API_KEY", "")
+        # Fallback: walk ALL secrets sections for GROQ_API_KEY.
+        # Handles the common Streamlit Cloud mistake where the key is placed
+        # below a [section] header in the TOML, making it nested inside that
+        # section instead of at top level.
+        try:
+            for _sec_name in list(st.secrets.keys()):
+                _sec = st.secrets.get(_sec_name, None)
+                if _sec is None or not hasattr(_sec, "get"):
+                    continue
+                for k in ("GROQ_API_KEY", "groq_api_key", "GROQ_KEY", "groq_key"):
+                    sk = _sec.get(k, "")
+                    if sk:
+                        return sk
+        except Exception:
+            pass
+    # Environment variable fallback
+    for env_name in ("GROQ_API_KEY", "GROQ_KEY"):
+        v = os.environ.get(env_name, "")
+        if v:
+            return v
+    return ""
 
 
 def _friendly_error(exc):
@@ -63,9 +98,18 @@ def _friendly_error(exc):
     return f"Groq API error: {s}"
 
 
+if HAS_STREAMLIT:
+    @st.cache_resource
+    def _get_groq_client(api_key: str):
+        return Groq(api_key=api_key, timeout=30.0)
+else:
+    def _get_groq_client(api_key: str):
+        return Groq(api_key=api_key, timeout=30.0)
+
+
 def _groq_chat(messages, api_key, temperature=0.3, max_tokens=1500):
     """Call Groq with model fallback + timeout. Returns response content or raises."""
-    client = Groq(api_key=api_key, timeout=30.0)
+    client = _get_groq_client(api_key)
     last_exc = None
     for model in MODEL_FALLBACK_CHAIN:
         try:

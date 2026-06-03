@@ -45,7 +45,15 @@ def _ensure_dir():
 def get_connection():
     """Persistent DuckDB connection (cached across reruns)."""
     _ensure_dir()
-    return duckdb.connect(DB_PATH)
+    con = duckdb.connect(DB_PATH)
+    # Cap memory usage so DuckDB never causes the Streamlit Cloud OOM kill.
+    # 300 MB is conservative but safe for 1 GB free-tier instances.
+    try:
+        con.execute("SET memory_limit='300MB'")
+        con.execute("SET threads=2")
+    except Exception:
+        pass
+    return con
 
 
 def save_df(name: str, df: pd.DataFrame):
@@ -57,6 +65,7 @@ def save_df(name: str, df: pd.DataFrame):
     try:
         con.execute(f"DROP TABLE IF EXISTS {safe}")
         con.execute(f"CREATE TABLE {safe} AS SELECT * FROM df")
+        con.execute("CHECKPOINT")  # Flush WAL to disk, releasing in-process memory
     except Exception as e:
         print(f"[DuckDB] save_df({safe}) error: {e}")
 

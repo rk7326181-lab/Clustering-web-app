@@ -8,6 +8,7 @@ import requests
 import time
 import streamlit as st
 from shapely.wkt import loads as wkt_loads
+from shapely.geometry import mapping as shapely_mapping
 
 try:
     import folium
@@ -173,16 +174,33 @@ def create_polygon_map_cached(poly_hash, cluster_hash, awb_hash,
 
 
 def _base_map(center_lat, center_lon, zoom=9, satellite=False, draw_enabled=False):
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, tiles=None)
+    # India bounding box: approx (6.5°N, 68°E) to (37°N, 97.5°E).
+    # min_zoom=4 prevents zoom-out below sub-continent view (no world-tile downloads);
+    # max_bounds + maxBounds restricts panning so users can't scroll off into the
+    # Pacific or Africa (saves tile bandwidth + lowers memory pressure on Cloud).
+    _INDIA_SW = [6.5, 68.0]
+    _INDIA_NE = [37.0, 97.5]
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=zoom,
+        tiles=None,
+        min_zoom=4,
+        max_bounds=True,
+    )
+    # Apply the India bounding box as a hard pan limit on the underlying Leaflet map
+    m.options["maxBounds"] = [_INDIA_SW, _INDIA_NE]
     # Multi-tile layers — Street / Satellite / Terrain
-    folium.TileLayer("OpenStreetMap", name="Street Map").add_to(m)
+    folium.TileLayer("OpenStreetMap", name="Street Map", min_zoom=4, max_zoom=18,
+                     bounds=[_INDIA_SW, _INDIA_NE]).add_to(m)
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri", name="Satellite", overlay=False, control=True
+        attr="Esri", name="Satellite", overlay=False, control=True,
+        min_zoom=4, max_zoom=18, bounds=[_INDIA_SW, _INDIA_NE],
     ).add_to(m)
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri", name="Terrain", overlay=False, control=True
+        attr="Esri", name="Terrain", overlay=False, control=True,
+        min_zoom=4, max_zoom=18, bounds=[_INDIA_SW, _INDIA_NE],
     ).add_to(m)
     # Draw plugin (only when edit mode is on)
     if draw_enabled:
@@ -320,7 +338,6 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
             poly = wkt_loads(wkt)
             # Simplify polygon to reduce map HTML size (~100m tolerance)
             poly = poly.simplify(0.001, preserve_topology=True)
-            latlon = [[lat, lon] for lon, lat in poly.exterior.coords]
             cc = row.get("Cluster_Code", "")
             hub = row.get(hub_col, "")
             cat = row.get("Cluster_Category", "")
@@ -348,14 +365,19 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
                 fill_color = hub_color
 
             popup = f"<b>{cc}</b><br>Hub: {hub}<br>Pincode: {pincode}<br>Rate: ₹{rate}<br>Shipments: {ships:,}<br>Price: ₹{price:,.0f}"
-            folium.Polygon(
-                locations=latlon, popup=folium.Popup(popup, max_width=280),
+            # Use GeoJson instead of Polygon so interior rings (holes in donut shapes) are rendered correctly
+            folium.GeoJson(
+                shapely_mapping(poly),
+                style_function=lambda x, fc=fill_color, hc=hub_color: {
+                    "fillColor": fc, "color": hc, "weight": 2.5, "fillOpacity": 0.45,
+                },
+                popup=folium.Popup(popup, max_width=280),
                 tooltip=f"{pincode} | ₹{price:,.0f}" if ships > 0 else f"{pincode} | ₹{rate}",
-                color=hub_color, weight=2.5, fill=True, fill_color=fill_color, fill_opacity=0.45,
             ).add_to(m)
 
-            # Centroid label — show payout rate + description; burn mode shows cost in red
-            cx, cy = poly.centroid.x, poly.centroid.y
+            # Use representative_point so label lands inside the ring, not at the center of a hole
+            rep_pt = poly.representative_point()
+            cx, cy = rep_pt.x, rep_pt.y
             desc = row.get("Description", "")
             if viz_mode == "burn":
                 label = f"🔥₹{price:,.0f}" if price > 0 else f"₹{rate}"
@@ -409,25 +431,84 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
             ).add_to(hub_fg)
     hub_fg.add_to(m)
 
-    # Shipment heatmap
+    # Shipment heatmap / dots — shows ALL deliveries including outside-polygon ones
     if awb_df is not None and len(awb_df) > 0 and viz_mode in ("heatmap", "dots"):
         adf = awb_df.copy(); adf.columns = adf.columns.str.strip().str.lower()
         adf["lat"] = pd.to_numeric(adf["lat"], errors="coerce")
         adf["long"] = pd.to_numeric(adf["long"], errors="coerce")
         adf = adf.dropna(subset=["lat", "long"])
         adf = adf[(adf["lat"] != 0) & (adf["long"] != 0)]
-        if hub_filter and hub_filter != "All Hubs" and "cluster_name" in adf.columns:
-            valid_clusters = df["Cluster_Code"].tolist() if "Cluster_Code" in df.columns else []
-            adf = adf[adf["cluster_name"].isin(valid_clusters)]
-        if len(adf) > 0:
+
+        # Split into inside-zone and outside-zone deliveries
+        valid_clusters = df["Cluster_Code"].tolist() if "Cluster_Code" in df.columns else []
+        if "cluster_name" in adf.columns:
+            adf_in = adf[adf["cluster_name"].isin(valid_clusters)]
+            adf_out_all = adf[~adf["cluster_name"].isin(valid_clusters)]
+        else:
+            adf_in = adf
+            adf_out_all = pd.DataFrame()
+
+        # For hub filter: restrict outside-zone to orders from this hub's pincodes
+        if hub_filter and hub_filter != "All Hubs" and not adf_out_all.empty:
+            hub_pins = set()
+            if cluster_df is not None:
+                _cdf_tmp = cluster_df.copy(); _cdf_tmp.columns = _cdf_tmp.columns.str.strip()
+                _hcol = "Hub_Name" if "Hub_Name" in _cdf_tmp.columns else "hub_name"
+                _pcol = "Pincode" if "Pincode" in _cdf_tmp.columns else "pincode"
+                if _hcol in _cdf_tmp.columns and _pcol in _cdf_tmp.columns:
+                    hub_pins = set(
+                        _cdf_tmp[_cdf_tmp[_hcol] == hub_filter][_pcol]
+                        .astype(str).str.strip().str.replace(".0", "", regex=False)
+                    )
+            if hub_pins and "pincode" in adf_out_all.columns:
+                _adf_pc = adf_out_all["pincode"].astype(str).str.strip().str.replace(".0", "", regex=False)
+                adf_out = adf_out_all[_adf_pc.isin(hub_pins)]
+            elif "hub" in adf_out_all.columns:
+                adf_out = adf_out_all[adf_out_all["hub"].astype(str).str.lower() == hub_filter.lower()]
+            else:
+                adf_out = adf_out_all
+        else:
+            adf_out = adf_out_all
+
+        # In-zone deliveries
+        if len(adf_in) > 0:
             if viz_mode == "heatmap":
-                HeatMap(adf[["lat", "long"]].values.tolist(), radius=12, blur=8, max_zoom=13).add_to(m)
+                HeatMap(adf_in[["lat", "long"]].values.tolist(), radius=12, blur=8, max_zoom=13).add_to(m)
             elif viz_mode == "dots":
-                for _, r in adf.iterrows():
+                for _, r in adf_in.head(5000).iterrows():
                     folium.CircleMarker(
                         location=[r["lat"], r["long"]], radius=3,
                         color="#0B8A7A", fill=True, fill_opacity=0.6, weight=1,
                     ).add_to(m)
+
+        # Outside-zone deliveries — separate layer so they can be toggled and counted
+        if len(adf_out) > 0:
+            _out_label = f"Outside Polygon ({len(adf_out):,} orders)"
+            out_fg = folium.FeatureGroup(name=_out_label, show=True)
+            if viz_mode == "heatmap":
+                HeatMap(
+                    adf_out[["lat", "long"]].values.tolist(),
+                    radius=12, blur=8, max_zoom=13,
+                    gradient={"0.4": "orange", "0.65": "red", "1": "darkred"},
+                ).add_to(out_fg)
+            elif viz_mode == "dots":
+                for _, r in adf_out.head(3000).iterrows():
+                    folium.CircleMarker(
+                        location=[r["lat"], r["long"]], radius=4,
+                        color="#e74c3c", fill=True, fill_color="#e74c3c",
+                        fill_opacity=0.75, weight=1.5,
+                        tooltip=f"Outside zone | {r.get('pincode', '')}",
+                    ).add_to(out_fg)
+            out_fg.add_to(m)
+            # Summary badge on map
+            _badge_html = (
+                f'<div style="position:fixed;top:70px;right:60px;z-index:9999;'
+                f'background:rgba(239,68,68,0.92);color:#fff;padding:6px 14px;'
+                f'border-radius:8px;font-size:13px;font-weight:700;'
+                f'font-family:Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.3);">'
+                f'&#9888; {len(adf_out):,} outside zone</div>'
+            )
+            m.get_root().html.add_child(folium.Element(_badge_html))
 
     # Auto-fit map bounds to show all polygons
     if polygon_lats and polygon_lons:
@@ -776,7 +857,6 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
             if pd.isna(wkt) or not wkt:
                 continue
             poly = wkt_loads(wkt)
-            latlon = [[lat, lon] for lon, lat in poly.exterior.coords]
 
             cc = row.get("Cluster_Code", "")
             hub = row.get(hub_col, "")
@@ -791,15 +871,14 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
                 f"<br><i>Idx: {idx}</i>"
             )
 
-            folium.Polygon(
-                locations=latlon,
+            # Use GeoJson so interior rings (donut holes) are rendered correctly
+            folium.GeoJson(
+                shapely_mapping(poly),
+                style_function=lambda x, hc=hub_color: {
+                    "fillColor": hc, "color": hc, "weight": 2.5, "fillOpacity": 0.35,
+                },
                 popup=folium.Popup(popup_html, max_width=280),
                 tooltip=f"{cc} — ₹{desc}",
-                color=hub_color,
-                weight=2.5,
-                fill=True,
-                fill_color=hub_color,
-                fill_opacity=0.35,
             ).add_to(fg)
         except Exception:
             continue

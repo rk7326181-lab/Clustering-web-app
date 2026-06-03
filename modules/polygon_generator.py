@@ -68,7 +68,7 @@ def _make_bands(step_km):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _generate_cluster_polygons_core(cluster_df, pin_boundaries_df, radius_limit_km=4, hub_radius_map=None):
+def _generate_cluster_polygons_core(cluster_df, pin_boundaries_df, radius_limit_km=5, hub_radius_map=None):
     """Core polygon generation logic (cached). Returns (records list, skipped list)."""
     hub_radius_map = hub_radius_map or {}
     live = clean_pincode(cluster_df.copy())
@@ -117,14 +117,13 @@ def _generate_cluster_polygons_core(cluster_df, pin_boundaries_df, radius_limit_
                 seq = pincode_seq.get(pc, 0)
                 for g in geoms:
                     if g.geom_type != "Polygon": continue
-                    coords = list(g.exterior.coords)
                     sfx = chr(65 + seq) if seq < 26 else f"Z{seq - 25}"
                     name = f"{pc}_{sfx}"
                     cat = CLUSTER_MAP.get(description.strip(), "Unknown")
                     records.append({
                         "Pincode": pc, "Hub Name": hub_name, "Cluster_Code": name,
                         "Description": description, "Cluster_Category": cat,
-                        "Polygon WKT": ShapelyPolygon(coords).wkt,
+                        "Polygon WKT": g.wkt,
                     })
                     seq += 1
                 pincode_seq[pc] = seq
