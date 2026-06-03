@@ -1784,6 +1784,51 @@ elif nav.startswith("3"):
                     if st.button("↶ Undo Last Edit", key="s3_undo"):
                         st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
                         st.rerun()
+
+                # ── Import Edited Polygons CSV ──────────────────────────────
+                st.markdown('<div class="sfx-header">💾 Save Edited Polygons</div>', unsafe_allow_html=True)
+                st.info(
+                    "**How to save:**  \n"
+                    "1. Edit polygon vertices on the map above  \n"
+                    "2. Click **✓ Save** on the Leaflet toolbar  \n"
+                    "3. Click **⬇ Save / Download Edited Polygons (CSV)** (bottom-center of map)  \n"
+                    "4. Upload the downloaded CSV below to save to the app"
+                )
+                _s3_import = st.file_uploader(
+                    "Upload edited_polygons.csv",
+                    type=["csv"],
+                    key="s3_import_edited",
+                    help="Download from the map above, then upload here",
+                )
+                if _s3_import:
+                    try:
+                        _imp = pd.read_csv(_s3_import)
+                        _poly_s3 = st.session_state.get("polygon_records_df").copy()
+                        _wc_s3 = "Polygon WKT" if "Polygon WKT" in _poly_s3.columns else "boundary"
+                        _cc_s3 = "Cluster_Code" if "Cluster_Code" in _poly_s3.columns else "cluster_code"
+                        st.session_state.setdefault("edit_undo_stack", []).append(_poly_s3.copy())
+                        _updated_s3 = 0
+                        for _, _ir in _imp.iterrows():
+                            _cc_val = str(_ir.get("cluster_code", "")).strip()
+                            _wkt_val = str(_ir.get("geometry_wkt", "")).strip()
+                            if not _cc_val or not _wkt_val:
+                                continue
+                            _mask_s3 = _poly_s3[_cc_s3].astype(str).str.strip() == _cc_val
+                            if _mask_s3.any():
+                                _poly_s3.loc[_mask_s3, _wc_s3] = _wkt_val
+                                _updated_s3 += 1
+                        st.session_state["polygon_records_df"] = _poly_s3
+                        try:
+                            _poly_s3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
+                                            index=False, encoding="utf-8-sig")
+                        except Exception:
+                            pass
+                        add_log(f"Imported {_updated_s3} polygon edits from CSV", "success")
+                        st.success(f"✅ Saved {_updated_s3} polygon edits! Map refreshing...")
+                        st.rerun()
+                    except Exception as _ie:
+                        st.error(f"Import error: {_ie}")
+
             else:
                 _s3_awb = st.session_state.get("final_result_df")
                 _s3_vm = s3_viz_mode.lower() if s3_viz_mode != "Default" else "none"

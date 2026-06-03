@@ -893,6 +893,11 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
 
     pin_col = "Pincode" if "Pincode" in df.columns else "pincode"
 
+    # Build polygon metadata dict for the client-side download button.
+    # Keyed by "cx|cy" (centroid rounded to 6dp) so JS can match edited polygons
+    # back to their original metadata by nearest-centroid lookup.
+    poly_meta = {}
+
     for idx, row in df.iterrows():
         try:
             wkt = row.get("Polygon WKT", "")
@@ -906,6 +911,17 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
             desc = row.get("Description", "")
             cat = row.get("Cluster_Category", "")
             hub_color = hub_colors.get(hub, "#3498db")
+
+            # Store metadata keyed by rounded centroid for JS nearest-lookup
+            cx = round(poly.centroid.x, 6)
+            cy = round(poly.centroid.y, 6)
+            poly_meta[f"{cx}|{cy}"] = {
+                "cluster_code": str(cc),
+                "hub_name": str(hub),
+                "pincode": str(pincode),
+                "description": str(desc),
+                "cluster_category": str(cat),
+            }
 
             popup_html = (
                 f"<b>{cc}</b><br>Hub: {hub}<br>Pincode: {pincode}"
@@ -936,6 +952,61 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
     # The FG must live on the map so its JS variable is defined; Draw(feature_group=fg)
     # then uses it as drawnItems, making existing polygons editable/deletable.
     fg.add_to(m)
+
+    # ── Client-side "Save / Download Edited Polygons" button ──────────────
+    # This is the SAME approach as Maps Studio: JavaScript reads the current
+    # Leaflet layer state directly (no Streamlit round-trip) and downloads CSV.
+    # After downloading, the user re-imports via the upload section below the map.
+    import json as _json
+    _meta_js = _json.dumps(poly_meta)
+    _export_html = f"""
+<div id="_poly_export_bar" style="position:fixed;bottom:12px;left:50%;transform:translateX(-50%);
+     z-index:9999;display:flex;gap:8px;align-items:center;pointer-events:auto">
+  <button onclick="_downloadEditedPolygons()" style="background:#0B8A7A;color:#fff;border:none;
+    border-radius:8px;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;
+    box-shadow:0 3px 10px rgba(0,0,0,.35);font-family:Arial,sans-serif;
+    transition:opacity .15s" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
+    ⬇ Save / Download Edited Polygons (CSV)
+  </button>
+</div>
+<script>
+var _POLY_META = {_meta_js};
+function _closestMeta(cx, cy) {{
+  var best = null, bd = 99999;
+  Object.keys(_POLY_META).forEach(function(k) {{
+    var p = k.split('|'), d = Math.sqrt(Math.pow(parseFloat(p[0])-cx,2)+Math.pow(parseFloat(p[1])-cy,2));
+    if (d < bd) {{ bd = d; best = _POLY_META[k]; }}
+  }});
+  return best || {{}};
+}}
+function _downloadEditedPolygons() {{
+  if (!window.drawnItems) {{ alert('No editable polygons found. Make sure Edit Mode is on.'); return; }}
+  var layers = window.drawnItems.getLayers();
+  if (!layers.length) {{ alert('No polygons to export.'); return; }}
+  var rows = ['"cluster_code","hub_name","pincode","description","cluster_category","geometry_wkt"'];
+  layers.forEach(function(layer) {{
+    if (!layer.getLatLngs) return;
+    var ll = layer.getLatLngs();
+    // Flatten: simple polygon gives [LatLng,...], with holes gives [[LatLng,...],...]
+    var outer = (Array.isArray(ll[0]) && Array.isArray(ll[0][0])) ? ll[0] : (Array.isArray(ll[0]) ? ll[0] : ll);
+    var sumX=0, sumY=0, n=outer.length;
+    outer.forEach(function(p){{sumX+=p.lng||p[1]; sumY+=p.lat||p[0];}});
+    var meta = _closestMeta(sumX/n, sumY/n);
+    var coords = outer.map(function(p){{return (p.lng||p[1])+' '+(p.lat||p[0]);}}).join(',');
+    var wkt = 'POLYGON((' + coords + '))';
+    function q(v){{return '"'+String(v||'').replace(/"/g,'""')+'"';}}
+    rows.push([q(meta.cluster_code),q(meta.hub_name),q(meta.pincode),q(meta.description),q(meta.cluster_category),q(wkt)].join(','));
+  }});
+  var blob = new Blob([rows.join('\\n')], {{type:'text/csv;charset=utf-8;'}});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href=url; a.download='edited_polygons.csv';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}}
+</script>"""
+    m.get_root().html.add_child(folium.Element(_export_html))
+
     MeasureControl(
         position="topleft",
         primary_length_unit="kilometers",
@@ -994,6 +1065,7 @@ def create_editable_live_cluster_map(lcd, lhd=None, hub_filter=None, satellite=F
     hub_colors = get_hub_color_map(all_hubs)
 
     fg = folium.FeatureGroup(name="editable_polygons")
+    lc_meta = {}  # centroid-keyed metadata for client-side download
 
     for idx, row in df.iterrows():
         try:
@@ -1008,6 +1080,16 @@ def create_editable_live_cluster_map(lcd, lhd=None, hub_filter=None, satellite=F
             surge = float(row.get("surge_amount", 0) or 0)
             cat   = row.get("cluster_category", "")
             hub_color = hub_colors.get(hub, "#3498db")
+
+            cx = round(poly.centroid.x, 6)
+            cy = round(poly.centroid.y, 6)
+            lc_meta[f"{cx}|{cy}"] = {
+                "cluster_code": str(code),
+                "hub_name": str(hub),
+                "pincode": str(pin),
+                "surge_amount": str(surge),
+                "cluster_category": str(cat),
+            }
 
             popup_html = (
                 f"<b>{code}</b><br>Hub: {hub}<br>Pincode: {pin}"
@@ -1035,6 +1117,44 @@ def create_editable_live_cluster_map(lcd, lhd=None, hub_filter=None, satellite=F
             continue
 
     fg.add_to(m)
+
+    # Client-side download button for live cluster polygons
+    import json as _json5
+    _lc_meta_js = _json5.dumps(lc_meta)
+    _lc_export = f"""
+<div style="position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:9999">
+  <button onclick="_downloadLcPolygons()" style="background:#0B8A7A;color:#fff;border:none;
+    border-radius:8px;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;
+    box-shadow:0 3px 10px rgba(0,0,0,.35);font-family:Arial,sans-serif">
+    ⬇ Save / Download Edited Clusters (CSV)
+  </button>
+</div>
+<script>
+var _LC_META = {_lc_meta_js};
+function _closestLcMeta(cx,cy){{var best=null,bd=99999;Object.keys(_LC_META).forEach(function(k){{var p=k.split('|'),d=Math.sqrt(Math.pow(parseFloat(p[0])-cx,2)+Math.pow(parseFloat(p[1])-cy,2));if(d<bd){{bd=d;best=_LC_META[k];}}}});return best||{{}};}}
+function _downloadLcPolygons(){{
+  if(!window.drawnItems){{alert('No editable polygons.');return;}}
+  var layers=window.drawnItems.getLayers();
+  if(!layers.length){{alert('No polygons to export.');return;}}
+  var rows=['"cluster_code","hub_name","pincode","surge_amount","cluster_category","geometry_wkt"'];
+  layers.forEach(function(layer){{
+    if(!layer.getLatLngs)return;
+    var ll=layer.getLatLngs();
+    var outer=(Array.isArray(ll[0])&&Array.isArray(ll[0][0]))?ll[0]:(Array.isArray(ll[0])?ll[0]:ll);
+    var sx=0,sy=0,n=outer.length;
+    outer.forEach(function(p){{sx+=p.lng||p[1];sy+=p.lat||p[0];}});
+    var meta=_closestLcMeta(sx/n,sy/n);
+    var wkt='POLYGON(('+outer.map(function(p){{return(p.lng||p[1])+' '+(p.lat||p[0]);}}).join(',')+'))';
+    function q(v){{return'"'+String(v||'').replace(/"/g,'""')+'"';}}
+    rows.push([q(meta.cluster_code),q(meta.hub_name),q(meta.pincode),q(meta.surge_amount),q(meta.cluster_category),q(wkt)].join(','));
+  }});
+  var blob=new Blob([rows.join('\\n')],{{type:'text/csv;charset=utf-8;'}});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');a.href=url;a.download='edited_clusters.csv';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+}}
+</script>"""
+    m.get_root().html.add_child(folium.Element(_lc_export))
 
     # Hub markers
     _hub_src = None
