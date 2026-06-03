@@ -1607,6 +1607,8 @@ elif nav.startswith("3"):
                 value=False,
                 help="Single hub only. Drag vertices to reshape, draw new polygons, or delete existing ones.",
             )
+            if not edit_polygons:
+                st.session_state.pop("_s3_drawings", None)
         with _s3mc2:
             s3_rate_filter = st.selectbox("Rate Filter", ["All"] + [f"₹{i}" for i in range(0, 9)] + ["Nil"], key="s3_map_rate")
         with _s3mc3:
@@ -1670,10 +1672,16 @@ elif nav.startswith("3"):
                     map_out_s3 = None
                     st.warning("Could not render editable map — no polygons to display for this hub.")
 
+                # Store drawings in session state the moment they arrive so they
+                # survive the re-render triggered when the user clicks Apply.
                 if map_out_s3 and map_out_s3.get("all_drawings"):
-                    drawings = map_out_s3["all_drawings"]
+                    st.session_state["_s3_drawings"] = map_out_s3["all_drawings"]
+
+                _s3_drawings = st.session_state.get("_s3_drawings", [])
+                if _s3_drawings:
+                    drawings = _s3_drawings
                     st.markdown(
-                        f'<div class="sfx-ok">📐 {len(drawings)} polygon(s) on map (edits, new draws, and surviving originals).</div>',
+                        f'<div class="sfx-ok">📐 {len(drawings)} polygon(s) ready — click Apply to save.</div>',
                         unsafe_allow_html=True,
                     )
                     if st.button("💾 Apply & Regenerate Image", type="primary", key="apply_vertex_edits"):
@@ -1733,6 +1741,7 @@ elif nav.startswith("3"):
                         except Exception:
                             pass
                         add_log(f"[{hub_filter}] reshaped {matched_count}, deleted {len(deleted_ids)}, new {len(new_rows)}", "success")
+                        st.session_state["_s3_drawings"] = []  # clear stored drawings
                         if new_rows:
                             st.session_state["_pending_new_polys"] = new_rows
                             st.session_state["_pending_new_polys_hub"] = hub_filter
@@ -2005,6 +2014,8 @@ elif nav.startswith("4"):
             viz_mode = st.radio("Shipment View", ["Burn", "Heatmap", "Dots"], horizontal=True, key="viz_mode")
         with vc3:
             edit_mode_s4 = st.toggle("Edit Mode", key="s4_edit_mode", value=False)
+            if not edit_mode_s4:
+                st.session_state.pop("_s4_drawings", None)
         with vc4:
             rate_filter = st.selectbox("Rate Filter", ["All"] + [f"₹{i}" for i in range(0, 9)] + ["Nil"], key="viz_rate")
         with vc5:
@@ -2142,16 +2153,22 @@ elif nav.startswith("4"):
                                 continue
 
             # ── Apply Vertex Edits ────────────────────────────────────────────
+            # Store drawings in session state the moment they arrive.
             if edit_mode_s4 and map_out_s4 and map_out_s4.get("all_drawings"):
-                drawings = map_out_s4["all_drawings"]
+                st.session_state["_s4_drawings"] = map_out_s4["all_drawings"]
+
+            _s4_drawings = st.session_state.get("_s4_drawings", [])
+            if edit_mode_s4 and _s4_drawings:
+                drawings = _s4_drawings
                 st.markdown(
-                    f'<div class="sfx-ok">📐 {len(drawings)} polygon(s) on map '
-                    f'(reshaped originals + new draws)</div>', unsafe_allow_html=True
+                    f'<div class="sfx-ok">📐 {len(drawings)} polygon(s) ready — click Apply to save.</div>',
+                    unsafe_allow_html=True
                 )
                 _undo_col, _apply_col = st.columns(2)
                 with _undo_col:
                     if st.session_state.get("edit_undo_stack") and st.button("↶ Undo Last Edit", key="s4_undo"):
                         st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
+                        st.session_state["_s4_drawings"] = []
                         add_log("Undid last polygon edit (Step 4)", "warning")
                         st.rerun()
                 with _apply_col:
@@ -2201,6 +2218,7 @@ elif nav.startswith("4"):
                         except Exception:
                             pass
                         add_log(f"[{sel_hub}] Vertex edits applied: {_cnt4} reshaped, {len(_del4)} deleted, {len(_new4)} new", "success")
+                        st.session_state["_s4_drawings"] = []  # clear stored drawings
                         st.success(f"✅ Applied — {_cnt4} reshaped, {len(_del4)} deleted, {len(_new4)} new. Map refreshed.")
                         st.rerun()
 
@@ -2492,6 +2510,8 @@ elif nav.startswith("5"):
             s5_color_mode = st.radio("Color by", ["Rate", "Pincode"], horizontal=True, key="lc_color_mode")
         with map_c5:
             edit_mode_s5 = st.toggle("Edit Mode", key="s5_edit_mode", value=False)
+            if not edit_mode_s5:
+                st.session_state.pop("_s5_drawings", None)
 
         if edit_mode_s5:
             st.info(
@@ -2608,10 +2628,14 @@ elif nav.startswith("5"):
                             continue
 
             # ── Apply vertex edits + new drawn clusters ───────────────────────
+            # Store drawings in session state the moment they arrive.
             if edit_mode_s5 and map_out_step5 and map_out_step5.get("all_drawings"):
+                st.session_state["_s5_drawings"] = map_out_step5["all_drawings"]
+
+            if edit_mode_s5 and st.session_state.get("_s5_drawings"):
                 from shapely.geometry import Polygon as _SP5
                 from shapely.wkt import loads as _wl5a
-                drawings5 = map_out_step5["all_drawings"]
+                drawings5 = st.session_state["_s5_drawings"]
                 lcd_cur = st.session_state.get("live_cluster_df")
                 _wc5 = "boundary" if (lcd_cur is not None and "boundary" in lcd_cur.columns) else "polygon wkt"
 
@@ -2665,12 +2689,14 @@ elif nav.startswith("5"):
                                 _nwkt5 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co5) + "))"
                                 _lcd5.at[_idx5, _wc5] = _nwkt5
                             st.session_state["live_cluster_df"] = _lcd5
+                            st.session_state["_s5_drawings"] = []  # clear stored drawings
                             add_log(f"Applied {len(_reshapes5)} vertex edit(s) to live clusters", "success")
                             st.success(f"✅ Applied {len(_reshapes5)} reshape(s). Map will refresh.")
                             st.rerun()
                 elif st.session_state.get("_s5_undo_stack"):
                     if st.button("↶ Undo Last Edit", key="s5_undo_nodrw"):
                         st.session_state["live_cluster_df"] = st.session_state["_s5_undo_stack"].pop()
+                        st.session_state["_s5_drawings"] = []
                         add_log("Undid last live cluster edit", "warning")
                         st.rerun()
 
