@@ -621,7 +621,8 @@ def _add_live_cluster_legend(map_obj):
 
 
 def create_live_cluster_map(lcd, lhd=None, hub_filter=None, rate_range=(0, 14),
-                             hub_type=None, show_labels=True, show_hubs=True):
+                             hub_type=None, show_labels=True, show_hubs=True,
+                             color_mode='rate'):
     """Interactive Folium map for live BigQuery cluster data.
 
     Polygons are colored by surge rate using the same tier scheme as the
@@ -674,6 +675,14 @@ def create_live_cluster_map(lcd, lhd=None, hub_filter=None, rate_range=(0, 14),
 
     m = _base_map(center_lat, center_lon)
 
+    # Build pincode color map for pincode mode
+    _pincode_palette = _PINCODE_PALETTE
+    pincode_color_map = {}
+    if color_mode == 'pincode':
+        unique_pins = sorted(df["pincode"].dropna().astype(str).unique().tolist()) if "pincode" in df.columns else []
+        for i, pin in enumerate(unique_pins):
+            pincode_color_map[pin] = _pincode_palette[i % len(_pincode_palette)]
+
     # FeatureGroups for clean LayerControl
     rate_label_fg = folium.FeatureGroup(name="Rate Labels", show=show_labels)
     hub_fg = folium.FeatureGroup(name="Hub Markers", show=show_hubs)
@@ -688,11 +697,17 @@ def create_live_cluster_map(lcd, lhd=None, hub_filter=None, rate_range=(0, 14),
             latlon = [[lat, lon] for lon, lat in poly.exterior.coords]
 
             surge = float(row.get("surge_amount", 0) or 0)
-            color = _surge_color(surge)
             hub   = row.get("hub_name", "")
             code  = row.get("cluster_code", "")
             pin   = str(row.get("pincode", ""))
             cat   = row.get("cluster_category", "")
+
+            if color_mode == 'pincode':
+                color = pincode_color_map.get(pin, '#9CA3AF')
+                fill_opacity = 0.45
+            else:
+                color = _surge_color(surge)
+                fill_opacity = 0.28
 
             popup_html = (
                 f"<div style='font-family:sans-serif;font-size:13px'>"
@@ -700,7 +715,7 @@ def create_live_cluster_map(lcd, lhd=None, hub_filter=None, rate_range=(0, 14),
                 f"<span style='color:#6b7280'>Hub:</span> {hub}<br>"
                 f"<span style='color:#6b7280'>Pincode:</span> {pin}<br>"
                 f"<span style='color:#6b7280'>Surge:</span> "
-                f"<b style='color:{color}'>₹{surge:.0f}</b><br>"
+                f"<b style='color:{_surge_color(surge)}'>₹{surge:.0f}</b><br>"
                 f"<span style='color:#6b7280'>Category:</span> {cat}"
                 f"</div>"
             )
@@ -709,7 +724,7 @@ def create_live_cluster_map(lcd, lhd=None, hub_filter=None, rate_range=(0, 14),
                 popup=folium.Popup(popup_html, max_width=300),
                 tooltip=f"{pin} — ₹{surge:.0f}",
                 color=color, weight=2,
-                fill=True, fill_color=color, fill_opacity=0.28,
+                fill=True, fill_color=color, fill_opacity=fill_opacity,
             ).add_to(m)
 
             cx, cy = poly.centroid.x, poly.centroid.y
@@ -792,16 +807,43 @@ def create_live_cluster_map(lcd, lhd=None, hub_filter=None, rate_range=(0, 14),
     if OsrmRouteDistanceTool._template is not None:
         OsrmRouteDistanceTool().add_to(m)
     folium.LayerControl(position="topright", collapsed=True).add_to(m)
-    _add_live_cluster_legend(m)
+
+    if color_mode == 'pincode' and pincode_color_map:
+        # Pincode color legend (bottom-right)
+        items = ''
+        for pin, clr in list(pincode_color_map.items())[:20]:
+            items += (
+                f'<div style="display:flex;align-items:center;gap:5px;padding:1px 0">'
+                f'<span style="width:16px;height:11px;background:{clr};border-radius:2px;'
+                f'border:1px solid rgba(0,0,0,.15);flex-shrink:0"></span>'
+                f'<span style="font-size:11px">{pin}</span></div>'
+            )
+        if len(pincode_color_map) > 20:
+            items += f'<div style="font-size:10px;color:#6b7280;margin-top:2px">+{len(pincode_color_map)-20} more…</div>'
+        pc_legend = (
+            '<div style="position:fixed;bottom:50px;right:50px;background:rgba(255,255,255,0.96);'
+            'border:1.5px solid #d1d5db;border-radius:8px;padding:10px 14px;'
+            'font-family:Arial,sans-serif;z-index:9999;box-shadow:0 4px 10px rgba(0,0,0,.12)">'
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">'
+            '<span style="font-size:12px;font-weight:700;color:#1f2937;border-bottom:2px solid #8B5CF6;padding-bottom:3px;flex:1">Pincode Colors</span>'
+            '<button onclick="var b=document.getElementById(\'_lc_pin_body\');var v=b.style.display!==\'none\';b.style.display=v?\'none\':\'block\';this.textContent=v?\'+\':\'−\'" '
+            'style="background:none;border:1px solid #9ca3af;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:13px;font-weight:700;color:#6b7280;margin-left:6px;line-height:1.3">−</button>'
+            '</div>'
+            f'<div id="_lc_pin_body" style="max-height:280px;overflow-y:auto">{items}</div>'
+            '</div>'
+        )
+        m.get_root().html.add_child(folium.Element(pc_legend))
+    else:
+        _add_live_cluster_legend(m)
 
     return m
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def create_live_cluster_map_cached(lcd_hash, lhd_hash, hub_filter, rate_range, hub_type,
-                                    show_labels, show_hubs, _lcd, _lhd):
+                                    show_labels, show_hubs, _lcd, _lhd, color_mode='rate'):
     """Cached HTML wrapper for create_live_cluster_map (non-edit mode, fast render)."""
-    m = create_live_cluster_map(_lcd, _lhd, hub_filter, rate_range, hub_type, show_labels, show_hubs)
+    m = create_live_cluster_map(_lcd, _lhd, hub_filter, rate_range, hub_type, show_labels, show_hubs, color_mode=color_mode)
     if m is None:
         return None
     return m._repr_html_()

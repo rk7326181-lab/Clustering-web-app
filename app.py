@@ -2481,7 +2481,7 @@ elif nav.startswith("5"):
     with lc_tab1:
         st.markdown('<div class="sfx-header">Live Cluster Map</div>', unsafe_allow_html=True)
 
-        map_c1, map_c2, map_c3, map_c4 = st.columns([2, 1, 1, 1])
+        map_c1, map_c2, map_c3, map_c4, map_c5 = st.columns([2, 1, 1, 1, 1])
         with map_c1:
             st.info(f"Displaying **{len(flt):,} clusters** across **{flt['hub_name'].nunique()} hubs**")
         with map_c2:
@@ -2489,6 +2489,8 @@ elif nav.startswith("5"):
         with map_c3:
             show_hubs = st.checkbox("Show Hub Markers", value=True, key="lc_hubs")
         with map_c4:
+            s5_color_mode = st.radio("Color by", ["Rate", "Pincode"], horizontal=True, key="lc_color_mode")
+        with map_c5:
             edit_mode_s5 = st.toggle("Edit Mode", key="s5_edit_mode", value=False)
 
         if edit_mode_s5:
@@ -2524,6 +2526,7 @@ elif nav.startswith("5"):
                 import folium as _folium5
                 from modules.visualizer import create_editable_live_cluster_map
                 m5, edit_fg5 = create_editable_live_cluster_map(flt, lhd, hub_filter=_s5_hub)
+                # (edit mode always uses rate colors for clarity)
                 if m5 is None:
                     st.warning("No cluster geometry to render. Make sure BQ data includes polygon boundaries.")
                     st.stop()
@@ -2550,11 +2553,12 @@ elif nav.startswith("5"):
             else:
                 # Non-edit mode — cached HTML for fast render (same as Step 4 Hub Visualisation Map)
                 _lhd_hash = _df_hash(lhd) if lhd is not None else "none"
+                _s5_cm = 'pincode' if s5_color_mode == "Pincode" else 'rate'
                 html5 = create_live_cluster_map_cached(
                     _df_hash(flt), _lhd_hash,
                     _s5_hub, (min_rate, max_rate), f_type,
                     show_labels, show_hubs,
-                    flt, lhd,
+                    flt, lhd, _s5_cm,
                 )
                 if html5:
                     components.html(html5, height=720, scrolling=False)
