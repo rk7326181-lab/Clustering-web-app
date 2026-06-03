@@ -898,6 +898,134 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
     return m, fg
 
 
+def create_editable_live_cluster_map(lcd, lhd=None, hub_filter=None, satellite=False):
+    """
+    Create a Folium map with live cluster polygons in an editable FeatureGroup.
+    Returns (map, feature_group) — pass the feature_group to the Leaflet-Draw
+    plugin so existing cluster boundaries can be reshaped by dragging vertices.
+
+    Handles live-cluster column names: boundary / polygon wkt, hub_name,
+    cluster_code, surge_amount, cluster_category, pincode.
+    """
+    if not HAS_FOLIUM:
+        return None, None
+    if lcd is None or len(lcd) == 0:
+        return None, None
+
+    df = lcd.copy()
+    df.columns = df.columns.str.strip().str.lower()
+
+    wkt_col = (
+        "boundary"    if "boundary"    in df.columns else
+        "polygon wkt" if "polygon wkt" in df.columns else
+        None
+    )
+    if not wkt_col:
+        return None, None
+
+    if hub_filter and hub_filter not in ("All Hubs", "All", None):
+        if "hub_name" in df.columns:
+            df = df[df["hub_name"] == hub_filter]
+
+    lats, lons = [], []
+    for wkt in df[wkt_col].dropna().head(50):
+        try:
+            p = wkt_loads(str(wkt))
+            lats.append(p.centroid.y)
+            lons.append(p.centroid.x)
+        except Exception:
+            pass
+    center_lat = float(np.mean(lats)) if lats else 20.59
+    center_lon = float(np.mean(lons)) if lons else 78.96
+
+    m = _base_map(center_lat, center_lon, satellite=satellite)
+
+    all_hubs = df["hub_name"].unique().tolist() if "hub_name" in df.columns else []
+    hub_colors = get_hub_color_map(all_hubs)
+
+    fg = folium.FeatureGroup(name="editable_polygons")
+
+    for idx, row in df.iterrows():
+        try:
+            wkt = row.get(wkt_col, "")
+            if pd.isna(wkt) or not wkt:
+                continue
+            poly = wkt_loads(str(wkt))
+
+            hub   = row.get("hub_name", "")
+            code  = row.get("cluster_code", "")
+            pin   = str(row.get("pincode", ""))
+            surge = float(row.get("surge_amount", 0) or 0)
+            cat   = row.get("cluster_category", "")
+            hub_color = hub_colors.get(hub, "#3498db")
+
+            popup_html = (
+                f"<b>{code}</b><br>Hub: {hub}<br>Pincode: {pin}"
+                f"<br>Rate: ₹{surge:.0f}<br>Category: {cat}"
+                f"<br><i>Idx: {idx}</i>"
+            )
+
+            folium.GeoJson(
+                shapely_mapping(poly),
+                style_function=lambda x, hc=hub_color: {
+                    "fillColor": hc, "color": hc, "weight": 2.5, "fillOpacity": 0.35,
+                },
+                popup=folium.Popup(popup_html, max_width=280),
+                tooltip=f"{code} — ₹{surge:.0f}",
+            ).add_to(fg)
+        except Exception:
+            continue
+
+    fg.add_to(m)
+
+    # Hub markers
+    _hub_src = None
+    if lhd is not None and not (hasattr(lhd, "empty") and lhd.empty):
+        hdf = lhd.copy()
+        hdf.columns = hdf.columns.str.strip().str.lower()
+        _lat = next((c for c in ["hub_lat", "latitude", "lat"] if c in hdf.columns), None)
+        _lon = next((c for c in ["hub_long", "hub_lon", "longitude", "lon"] if c in hdf.columns), None)
+        _nm  = next((c for c in ["hub_name", "name"] if c in hdf.columns), None)
+        if _lat and _lon and _nm:
+            _hub_src = hdf[[_nm, _lat, _lon]].rename(
+                columns={_nm: "hub_name", _lat: "lat", _lon: "lon"}
+            )
+    if _hub_src is not None and not _hub_src.empty:
+        if hub_filter and hub_filter not in ("All Hubs", "All", None):
+            _hub_src = _hub_src[_hub_src["hub_name"] == hub_filter]
+        for _, h in _hub_src.drop_duplicates(subset=["hub_name"]).iterrows():
+            try:
+                folium.Marker(
+                    location=[float(h["lat"]), float(h["lon"])],
+                    popup=f"<b>{h['hub_name']}</b>",
+                    tooltip=h["hub_name"],
+                    icon=folium.DivIcon(
+                        html=(
+                            f'<div style="cursor:pointer;background:#e74c3c;color:#fff;'
+                            f'border:3px solid #fff;border-radius:50%;width:30px;height:30px;'
+                            f'display:flex;align-items:center;justify-content:center;'
+                            f'font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.45);'
+                            f'font-weight:700;line-height:30px;text-align:center;">&#127968;</div>'
+                        ),
+                        icon_size=(30, 30), icon_anchor=(15, 15),
+                    ),
+                ).add_to(m)
+            except Exception:
+                continue
+
+    if lats and lons:
+        m.fit_bounds([
+            [min(lats) - 0.02, min(lons) - 0.02],
+            [max(lats) + 0.02, max(lons) + 0.02],
+        ])
+
+    MeasureControl(position="topleft", primary_length_unit="kilometers").add_to(m)
+    if OsrmRouteDistanceTool._template is not None:
+        OsrmRouteDistanceTool().add_to(m)
+    folium.LayerControl(position="topright", collapsed=False).add_to(m)
+    return m, fg
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def _get_osrm_route(hub_lat, hub_lon, vol_lat, vol_lon):
     """Fetch road route from OSRM. Returns (list of [lat, lon], distance_km) or (None, None).

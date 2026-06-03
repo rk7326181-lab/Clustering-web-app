@@ -2020,18 +2020,39 @@ elif nav.startswith("4"):
             hub_type = "All Types"
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
         if edit_mode_s4:
-            st.info("Edit Mode ON — click a polygon to edit rate, rename, or delete. Draw new shapes on the map.")
+            st.info("Edit Mode ON — drag polygon vertices to reshape, draw new polygons, or click a polygon to edit its rate/name/delete it.")
         try:
             import folium
             from streamlit_folium import st_folium
             import streamlit.components.v1 as components
-            from modules.visualizer import create_polygon_map, create_polygon_map_cached, _df_hash
+            from modules.visualizer import create_polygon_map, create_polygon_map_cached, create_editable_polygon_map, _df_hash
             if edit_mode_s4:
-                # Edit mode: build fresh map for click interactivity
-                m = create_polygon_map(poly, cdf, rdf, satellite=False, viz_mode=viz_mode.lower(), hub_filter=sel_hub, rate_filter=rate_filter, show_rate_labels=s4_show_rate_labels)
-                from folium.plugins import Draw
-                Draw(export=True, position="topleft", draw_options={"polyline": {"shapeOptions": {"color": "#FF6B35"}}, "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}}, "circle": False, "rectangle": True, "marker": True, "circlemarker": False}).add_to(m)
-                map_out_s4 = st_folium(m, width=None, height=700) if m else None
+                # Edit mode: editable map with vertex dragging
+                m, edit_fg = create_editable_polygon_map(poly, cdf, hub_filter=sel_hub, satellite=False)
+                if m is not None and edit_fg is not None:
+                    from folium.plugins import Draw
+                    Draw(
+                        export=False,
+                        position="topleft",
+                        feature_group=edit_fg,
+                        show_geometry_on_click=False,
+                        draw_options={
+                            "polyline": False, "circle": False, "rectangle": False,
+                            "marker": False, "circlemarker": False,
+                            "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}},
+                        },
+                        edit_options={"poly": {"allowIntersection": False}},
+                    ).add_to(m)
+                    _fg_js4 = edit_fg.get_name()
+                    m.get_root().script.add_child(folium.Element(f"window.drawnItems = {_fg_js4};"))
+                    map_out_s4 = st_folium(
+                        m, width=None, height=700,
+                        returned_objects=["all_drawings", "last_active_drawing"],
+                        key=f"s4_edit_map_{sel_hub}",
+                    )
+                else:
+                    map_out_s4 = None
+                    st.warning("Could not render editable map — no polygon data for this hub.")
             else:
                 # Non-edit mode: use cached HTML for speed
                 html = create_polygon_map_cached(
@@ -2113,8 +2134,116 @@ elif nav.startswith("4"):
                                     break
                             except Exception:
                                 continue
+
+            # ── Apply Vertex Edits ────────────────────────────────────────────
+            if edit_mode_s4 and map_out_s4 and map_out_s4.get("all_drawings"):
+                drawings = map_out_s4["all_drawings"]
+                st.markdown(
+                    f'<div class="sfx-ok">📐 {len(drawings)} polygon(s) on map '
+                    f'(reshaped originals + new draws)</div>', unsafe_allow_html=True
+                )
+                _undo_col, _apply_col = st.columns(2)
+                with _undo_col:
+                    if st.session_state.get("edit_undo_stack") and st.button("↶ Undo Last Edit", key="s4_undo"):
+                        st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
+                        add_log("Undid last polygon edit (Step 4)", "warning")
+                        st.rerun()
+                with _apply_col:
+                    if st.button("💾 Apply Edits & Refresh Map", type="primary", key="apply_s4_vertex"):
+                        from shapely.geometry import Polygon as _SP4
+                        from shapely.wkt import loads as _wl4a
+                        _pd4 = st.session_state.get("polygon_records_df").copy()
+                        _wc4 = "Polygon WKT" if "Polygon WKT" in _pd4.columns else "boundary"
+                        st.session_state.setdefault("edit_undo_stack", []).append(_pd4.copy())
+                        _hcol4 = "Hub Name" if "Hub Name" in _pd4.columns else "hub_name"
+                        _iter4 = _pd4[_pd4[_hcol4] == sel_hub] if sel_hub != "All Hubs" else _pd4
+                        _orig4 = []
+                        for _i4, _r4 in _iter4.iterrows():
+                            try:
+                                _g4 = _wl4a(str(_r4.get(_wc4, "")))
+                                _orig4.append((_i4, _g4.centroid.x, _g4.centroid.y))
+                            except Exception:
+                                continue
+                        _matched4, _new4, _cnt4 = set(), [], 0
+                        for _drw in drawings:
+                            _g = _drw.get("geometry", {})
+                            if _g.get("type") != "Polygon":
+                                continue
+                            _coords = _g.get("coordinates", [[]])[0]
+                            if len(_coords) < 4:
+                                continue
+                            _np4 = _SP4([(_c[0], _c[1]) for _c in _coords])
+                            _nwkt = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _coords) + "))"
+                            _ncx, _ncy = _np4.centroid.x, _np4.centroid.y
+                            _best, _bd = None, float("inf")
+                            for (_oi, _ox, _oy) in _orig4:
+                                if _oi in _matched4:
+                                    continue
+                                _d = ((_ox - _ncx)**2 + (_oy - _ncy)**2)**0.5
+                                if _d < _bd and _d < 0.05:
+                                    _bd = _d; _best = _oi
+                            if _best is not None:
+                                _pd4.at[_best, _wc4] = _nwkt; _matched4.add(_best); _cnt4 += 1
+                            else:
+                                _new4.append({_wc4: _nwkt})
+                        _del4 = [_i for (_i, _, _) in _orig4 if _i not in _matched4]
+                        if _del4:
+                            _pd4 = _pd4.drop(index=_del4).reset_index(drop=True)
+                        st.session_state["polygon_records_df"] = _pd4
+                        try:
+                            _pd4.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"), index=False, encoding="utf-8-sig")
+                        except Exception:
+                            pass
+                        add_log(f"[{sel_hub}] Vertex edits applied: {_cnt4} reshaped, {len(_del4)} deleted, {len(_new4)} new", "success")
+                        st.success(f"✅ Applied — {_cnt4} reshaped, {len(_del4)} deleted, {len(_new4)} new. Map refreshed.")
+                        st.rerun()
+
+            # Undo button always visible when stack has entries
+            elif edit_mode_s4 and st.session_state.get("edit_undo_stack"):
+                if st.button("↶ Undo Last Edit", key="s4_undo_nodrw"):
+                    st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
+                    add_log("Undid last polygon edit (Step 4)", "warning")
+                    st.rerun()
+
         except ImportError:
             st.info("Install folium for maps.")
+
+        # ── Download Polygons ─────────────────────────────────────────────────
+        if poly is not None and len(poly) > 0:
+            st.markdown('<div class="sfx-header">Download Polygons</div>', unsafe_allow_html=True)
+            _dl4 = poly.copy()
+            _hcol_dl = "Hub Name" if "Hub Name" in _dl4.columns else "hub_name"
+            if sel_hub != "All Hubs" and _hcol_dl in _dl4.columns:
+                _dl4 = _dl4[_dl4[_hcol_dl] == sel_hub]
+            _base4 = f"polygons_{sel_hub.replace(' ','_').replace('/','_')}_{datetime.now().strftime('%Y%m%d')}"
+            _dc1, _dc2, _dc3 = st.columns(3)
+            with _dc1:
+                st.download_button("⬇ CSV", get_download_bytes(_dl4, "csv"), f"{_base4}.csv", "text/csv", key="s4_dl_csv")
+            with _dc2:
+                try:
+                    from shapely.wkt import loads as _wl4g
+                    from shapely.geometry import mapping as _sm4g
+                    _wc4g = "Polygon WKT" if "Polygon WKT" in _dl4.columns else "boundary"
+                    _feats4 = []
+                    for _, _r in _dl4.iterrows():
+                        try:
+                            _g = _wl4g(str(_r.get(_wc4g, "")))
+                            _props = {k: (None if pd.isna(v) else v) for k, v in _r.items() if k != _wc4g}
+                            _feats4.append({"type": "Feature", "geometry": _sm4g(_g), "properties": _props})
+                        except Exception:
+                            continue
+                    _fc4g = {"type": "FeatureCollection", "features": _feats4}
+                    st.download_button("⬇ GeoJSON", json.dumps(_fc4g, default=str).encode("utf-8"), f"{_base4}.geojson", "application/geo+json", key="s4_dl_geojson")
+                except Exception as _eg:
+                    st.caption(f"GeoJSON error: {_eg}")
+            with _dc3:
+                try:
+                    from modules.visualizer import generate_kml as _gkml4
+                    _kml4 = _gkml4(_dl4)
+                    if _kml4:
+                        st.download_button("⬇ KML", _kml4.encode("utf-8"), f"{_base4}.kml", "application/vnd.google-earth.kml+xml", key="s4_dl_kml")
+                except Exception as _ek:
+                    st.caption(f"KML error: {_ek}")
 
 # ═══════════════════════════════════════════════════════
 # STEP 5 — LIVE CLUSTERS (Full Integration)
@@ -2372,30 +2501,33 @@ elif nav.startswith("5"):
             _s5_hub = f_hubs[0] if len(f_hubs) == 1 else "All Hubs"
 
             if edit_mode_s5:
-                # Edit/Draw mode — live folium object so st_folium returns click coords
-                m5 = create_live_cluster_map(
-                    flt, lhd,
-                    hub_filter=_s5_hub,
-                    rate_range=(min_rate, max_rate),
-                    hub_type=f_type,
-                    show_labels=show_labels,
-                    show_hubs=show_hubs,
-                )
+                # Edit mode — editable map with vertex dragging
+                import folium as _folium5
+                from modules.visualizer import create_editable_live_cluster_map
+                m5, edit_fg5 = create_editable_live_cluster_map(flt, lhd, hub_filter=_s5_hub)
                 if m5 is None:
                     st.warning("No cluster geometry to render. Make sure BQ data includes polygon boundaries.")
                     st.stop()
                 from folium.plugins import Draw
                 Draw(
-                    export=True, position="topleft",
+                    export=False, position="topleft",
+                    feature_group=edit_fg5,
+                    show_geometry_on_click=False,
                     draw_options={
-                        "polyline": False,
+                        "polyline": False, "circle": False, "rectangle": False,
+                        "marker": False, "circlemarker": False,
                         "polygon": {"shapeOptions": {"color": "#0B8A7A", "fillOpacity": 0.25}},
-                        "circle": False, "rectangle": True,
-                        "marker": True, "circlemarker": False,
-                    }
+                    },
+                    edit_options={"poly": {"allowIntersection": False}},
                 ).add_to(m5)
+                _fg5_js = edit_fg5.get_name()
+                m5.get_root().script.add_child(_folium5.Element(f"window.drawnItems = {_fg5_js};"))
                 from streamlit_folium import st_folium
-                map_out_step5 = st_folium(m5, width="100%", height=700)
+                map_out_step5 = st_folium(
+                    m5, width="100%", height=700,
+                    returned_objects=["all_drawings", "last_active_drawing"],
+                    key=f"s5_edit_map_{_s5_hub}",
+                )
             else:
                 # Non-edit mode — cached HTML for fast render (same as Step 4 Hub Visualisation Map)
                 _lhd_hash = _df_hash(lhd) if lhd is not None else "none"
@@ -2452,39 +2584,103 @@ elif nav.startswith("5"):
                         except Exception:
                             continue
 
-            # ── Drawn polygons — name & save new cluster ──────────────────────
+            # ── Apply vertex edits + new drawn clusters ───────────────────────
             if edit_mode_s5 and map_out_step5 and map_out_step5.get("all_drawings"):
-                for drawing in map_out_step5["all_drawings"]:
-                    if drawing.get("geometry", {}).get("type") == "Polygon":
-                        st.markdown('<div class="sfx-header">Name Your Drawn Cluster</div>', unsafe_allow_html=True)
-                        with st.form(key="s5_drawn_poly_form"):
-                            dc1, dc2 = st.columns(2)
-                            with dc1:
-                                new_code = st.text_input("Cluster Code", key="s5_drawn_code")
-                                new_hub  = st.text_input("Hub Name",     key="s5_drawn_hub")
-                                new_pin  = st.text_input("Pincode",      key="s5_drawn_pin")
-                            with dc2:
-                                new_rate = st.number_input("Surge Rate (₹)", min_value=0.0, step=0.5, key="s5_drawn_rate")
-                                new_cat  = st.text_input("Category (e.g. Rs.4)", key="s5_drawn_cat")
-                                new_desc = st.text_input("Description",  key="s5_drawn_desc")
-                            if st.form_submit_button("Save New Cluster", type="primary"):
-                                coords = drawing["geometry"]["coordinates"][0]
-                                wkt_str = "POLYGON((" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + "))"
-                                new_row = {
-                                    "cluster_code": new_code, "hub_name": new_hub,
-                                    "pincode": new_pin, "surge_amount": new_rate,
-                                    "cluster_category": new_cat, "description": new_desc,
-                                    "boundary": wkt_str, "is_active": True,
-                                    "hub_id": "", "id": "",
-                                }
-                                lcd_draw = st.session_state.get("live_cluster_df")
-                                st.session_state["live_cluster_df"] = (
-                                    pd.concat([lcd_draw, pd.DataFrame([new_row])], ignore_index=True)
-                                    if lcd_draw is not None else pd.DataFrame([new_row])
-                                )
-                                add_log(f"Created new cluster: {new_code} at ₹{new_rate}", "success")
-                                st.rerun()
-                        break
+                from shapely.geometry import Polygon as _SP5
+                from shapely.wkt import loads as _wl5a
+                drawings5 = map_out_step5["all_drawings"]
+                lcd_cur = st.session_state.get("live_cluster_df")
+                _wc5 = "boundary" if (lcd_cur is not None and "boundary" in lcd_cur.columns) else "polygon wkt"
+
+                # Compute original centroids once
+                _orig5 = []
+                if lcd_cur is not None and _wc5 in lcd_cur.columns:
+                    for _i5, _r5 in lcd_cur.iterrows():
+                        try:
+                            _g5 = _wl5a(str(_r5.get(_wc5, "")))
+                            _orig5.append((_i5, _g5.centroid.x, _g5.centroid.y))
+                        except Exception:
+                            continue
+
+                # Classify drawings as reshapes vs new polygons
+                _reshapes5, _new_draws5 = [], []
+                for _drw5 in drawings5:
+                    if _drw5.get("geometry", {}).get("type") != "Polygon":
+                        continue
+                    _coords5 = _drw5["geometry"].get("coordinates", [[]])[0]
+                    if len(_coords5) < 4:
+                        continue
+                    _np5 = _SP5([(_c[0], _c[1]) for _c in _coords5])
+                    _ncx5, _ncy5 = _np5.centroid.x, _np5.centroid.y
+                    _best5, _bd5 = None, float("inf")
+                    for (_oi5, _ox5, _oy5) in _orig5:
+                        _d5 = ((_ox5 - _ncx5)**2 + (_oy5 - _ncy5)**2)**0.5
+                        if _d5 < _bd5 and _d5 < 0.05:
+                            _bd5 = _d5; _best5 = _oi5
+                    if _best5 is not None:
+                        _reshapes5.append((_best5, _drw5, _coords5))
+                    else:
+                        _new_draws5.append(_drw5)
+
+                # Apply button for reshaped polygons
+                if _reshapes5:
+                    st.markdown(
+                        f'<div class="sfx-ok">✏️ {len(_reshapes5)} reshaped cluster(s) + '
+                        f'{len(_new_draws5)} new polygon(s) on map.</div>', unsafe_allow_html=True
+                    )
+                    _s5_undo_col, _s5_apply_col = st.columns(2)
+                    with _s5_undo_col:
+                        if st.session_state.get("_s5_undo_stack") and st.button("↶ Undo Last Edit", key="s5_undo"):
+                            st.session_state["live_cluster_df"] = st.session_state["_s5_undo_stack"].pop()
+                            add_log("Undid last live cluster edit", "warning")
+                            st.rerun()
+                    with _s5_apply_col:
+                        if st.button("💾 Apply Vertex Edits & Refresh Map", type="primary", key="apply_s5_vertex"):
+                            _lcd5 = lcd_cur.copy()
+                            st.session_state.setdefault("_s5_undo_stack", []).append(_lcd5.copy())
+                            for (_idx5, _drw5, _co5) in _reshapes5:
+                                _nwkt5 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co5) + "))"
+                                _lcd5.at[_idx5, _wc5] = _nwkt5
+                            st.session_state["live_cluster_df"] = _lcd5
+                            add_log(f"Applied {len(_reshapes5)} vertex edit(s) to live clusters", "success")
+                            st.success(f"✅ Applied {len(_reshapes5)} reshape(s). Map will refresh.")
+                            st.rerun()
+                elif st.session_state.get("_s5_undo_stack"):
+                    if st.button("↶ Undo Last Edit", key="s5_undo_nodrw"):
+                        st.session_state["live_cluster_df"] = st.session_state["_s5_undo_stack"].pop()
+                        add_log("Undid last live cluster edit", "warning")
+                        st.rerun()
+
+                # Show form only for truly new drawn polygons (not reshapes)
+                for _i_new5, drawing in enumerate(_new_draws5):
+                    st.markdown('<div class="sfx-header">Name Your Drawn Cluster</div>', unsafe_allow_html=True)
+                    with st.form(key=f"s5_drawn_poly_form_{_i_new5}"):
+                        dc1, dc2 = st.columns(2)
+                        with dc1:
+                            new_code = st.text_input("Cluster Code", key=f"s5_drawn_code_{_i_new5}")
+                            new_hub  = st.text_input("Hub Name",     key=f"s5_drawn_hub_{_i_new5}")
+                            new_pin  = st.text_input("Pincode",      key=f"s5_drawn_pin_{_i_new5}")
+                        with dc2:
+                            new_rate = st.number_input("Surge Rate (₹)", min_value=0.0, step=0.5, key=f"s5_drawn_rate_{_i_new5}")
+                            new_cat  = st.text_input("Category (e.g. Rs.4)", key=f"s5_drawn_cat_{_i_new5}")
+                            new_desc = st.text_input("Description",  key=f"s5_drawn_desc_{_i_new5}")
+                        if st.form_submit_button("Save New Cluster", type="primary"):
+                            coords = drawing["geometry"]["coordinates"][0]
+                            wkt_str = "POLYGON((" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + "))"
+                            new_row = {
+                                "cluster_code": new_code, "hub_name": new_hub,
+                                "pincode": new_pin, "surge_amount": new_rate,
+                                "cluster_category": new_cat, "description": new_desc,
+                                "boundary": wkt_str, "is_active": True,
+                                "hub_id": "", "id": "",
+                            }
+                            lcd_draw = st.session_state.get("live_cluster_df")
+                            st.session_state["live_cluster_df"] = (
+                                pd.concat([lcd_draw, pd.DataFrame([new_row])], ignore_index=True)
+                                if lcd_draw is not None else pd.DataFrame([new_row])
+                            )
+                            add_log(f"Created new cluster: {new_code} at ₹{new_rate}", "success")
+                            st.rerun()
 
         except Exception as e:
             import traceback
