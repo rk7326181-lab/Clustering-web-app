@@ -953,10 +953,15 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
     # then uses it as drawnItems, making existing polygons editable/deletable.
     fg.add_to(m)
 
-    # ── Client-side "Save / Download Edited Polygons" button ──────────────
-    # This is the SAME approach as Maps Studio: JavaScript reads the current
-    # Leaflet layer state directly (no Streamlit round-trip) and downloads CSV.
-    # After downloading, the user re-imports via the upload section below the map.
+    # ── Client-side polygon save/download ────────────────────────────────
+    # KEY INSIGHT: clicking Leaflet-Draw's ✓ Save fires draw:edited, which
+    # causes Streamlit to re-run and rebuild the map from original data —
+    # window.drawnItems is reset to original polygons BEFORE the user can
+    # click the download button.
+    # FIX: listen to draw:edited/draw:created/draw:deleted events and save
+    # the CURRENT edited state to localStorage immediately. localStorage
+    # persists across Streamlit re-runs. The download button reads from
+    # localStorage, not from window.drawnItems.getLayers().
     import json as _json
     _meta_js = _json.dumps(poly_meta)
     _export_html = f"""
@@ -971,30 +976,107 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
 </div>
 <script>
 var _POLY_META = {_meta_js};
+var _LS_KEY = 'sfx_edited_polygons';
+
+// Clear stale data from previous sessions
+localStorage.removeItem(_LS_KEY);
+
+function _getOuterRing(ll) {{
+  // L.polygon.getLatLngs() returns [[LatLng,...]] for simple polygon
+  // or [[LatLng,...],[LatLng,...]] for polygon with holes.
+  // The first ring is always the exterior.
+  if (Array.isArray(ll) && ll.length > 0 && Array.isArray(ll[0])) {{
+    return ll[0];
+  }}
+  return ll;
+}}
+
+function _layerToEntry(layer) {{
+  if (!layer.getLatLngs) return null;
+  var ll = layer.getLatLngs();
+  var outer = _getOuterRing(ll);
+  if (!outer || !outer.length) return null;
+  var coords = outer.map(function(p) {{ return [p.lng, p.lat]; }});
+  // Close the ring if not already closed
+  if (coords.length > 0) {{
+    var f = coords[0], l = coords[coords.length-1];
+    if (f[0] !== l[0] || f[1] !== l[1]) coords.push([f[0], f[1]]);
+  }}
+  var sx=0, sy=0, n=outer.length;
+  outer.forEach(function(p) {{ sx+=p.lng; sy+=p.lat; }});
+  return {{ coords:coords, cx:sx/n, cy:sy/n }};
+}}
+
+function _saveAllToLS() {{
+  if (!window.drawnItems) return;
+  var entries = [];
+  window.drawnItems.eachLayer(function(layer) {{
+    var e = _layerToEntry(layer);
+    if (e) entries.push(e);
+  }});
+  localStorage.setItem(_LS_KEY, JSON.stringify(entries));
+}}
+
+// Save IMMEDIATELY when any draw event fires — before Streamlit re-renders
+function _onDrawEvent(e) {{
+  // Give Leaflet a tick to commit the edit to the layer, then save
+  setTimeout(_saveAllToLS, 0);
+}}
+
+function _attachDrawListeners(mapObj) {{
+  mapObj.on('draw:edited', _onDrawEvent);
+  mapObj.on('draw:created', _onDrawEvent);
+  mapObj.on('draw:deleted', _onDrawEvent);
+}}
+
+// Attach as soon as the map variable is available
+(function waitForMap() {{
+  var mapEl = document.querySelector('.leaflet-container');
+  if (mapEl && mapEl._leaflet_id) {{
+    // Find the Leaflet map object
+    Object.keys(window).forEach(function(k) {{
+      if (window[k] && window[k]._container === mapEl && window[k].on) {{
+        _attachDrawListeners(window[k]);
+      }}
+    }});
+  }} else {{
+    setTimeout(waitForMap, 100);
+  }}
+}})();
+
 function _closestMeta(cx, cy) {{
   var best = null, bd = 99999;
   Object.keys(_POLY_META).forEach(function(k) {{
-    var p = k.split('|'), d = Math.sqrt(Math.pow(parseFloat(p[0])-cx,2)+Math.pow(parseFloat(p[1])-cy,2));
-    if (d < bd) {{ bd = d; best = _POLY_META[k]; }}
+    var p = k.split('|');
+    var d = Math.sqrt(Math.pow(parseFloat(p[0])-cx,2)+Math.pow(parseFloat(p[1])-cy,2));
+    if (d < bd) {{ bd=d; best=_POLY_META[k]; }}
   }});
   return best || {{}};
 }}
+
 function _downloadEditedPolygons() {{
-  if (!window.drawnItems) {{ alert('No editable polygons found. Make sure Edit Mode is on.'); return; }}
-  var layers = window.drawnItems.getLayers();
-  if (!layers.length) {{ alert('No polygons to export.'); return; }}
+  // Try localStorage first (has edited state from draw:edited event)
+  var saved = localStorage.getItem(_LS_KEY);
+  var entries = null;
+  if (saved) {{
+    try {{ entries = JSON.parse(saved); }} catch(e) {{ entries = null; }}
+  }}
+  // Fallback: read directly from window.drawnItems (works if no re-run happened)
+  if (!entries || !entries.length) {{
+    if (window.drawnItems) {{
+      _saveAllToLS();
+      try {{ entries = JSON.parse(localStorage.getItem(_LS_KEY)||'[]'); }} catch(e) {{ entries=[]; }}
+    }}
+  }}
+  if (!entries || !entries.length) {{
+    alert('No polygon data found. Edit polygons and click Save on the toolbar first.');
+    return;
+  }}
   var rows = ['"cluster_code","hub_name","pincode","description","cluster_category","geometry_wkt"'];
-  layers.forEach(function(layer) {{
-    if (!layer.getLatLngs) return;
-    var ll = layer.getLatLngs();
-    // Flatten: simple polygon gives [LatLng,...], with holes gives [[LatLng,...],...]
-    var outer = (Array.isArray(ll[0]) && Array.isArray(ll[0][0])) ? ll[0] : (Array.isArray(ll[0]) ? ll[0] : ll);
-    var sumX=0, sumY=0, n=outer.length;
-    outer.forEach(function(p){{sumX+=p.lng||p[1]; sumY+=p.lat||p[0];}});
-    var meta = _closestMeta(sumX/n, sumY/n);
-    var coords = outer.map(function(p){{return (p.lng||p[1])+' '+(p.lat||p[0]);}}).join(',');
-    var wkt = 'POLYGON((' + coords + '))';
-    function q(v){{return '"'+String(v||'').replace(/"/g,'""')+'"';}}
+  function q(v){{return'"'+String(v||'').replace(/"/g,'""')+'"';}}
+  entries.forEach(function(e) {{
+    var meta = _closestMeta(e.cx, e.cy);
+    var wkt = 'POLYGON((' + e.coords.map(function(c){{return c[0]+' '+c[1];}}).join(', ') + '))';
     rows.push([q(meta.cluster_code),q(meta.hub_name),q(meta.pincode),q(meta.description),q(meta.cluster_category),q(wkt)].join(','));
   }});
   var blob = new Blob([rows.join('\\n')], {{type:'text/csv;charset=utf-8;'}});
@@ -1003,6 +1085,7 @@ function _downloadEditedPolygons() {{
   a.href=url; a.download='edited_polygons.csv';
   document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
+  localStorage.removeItem(_LS_KEY);
 }}
 </script>"""
     m.get_root().html.add_child(folium.Element(_export_html))
@@ -1417,16 +1500,68 @@ def create_osrm_map(final_output_df, geojson_data=None, satellite=False, hub_fil
 
 
 def generate_kml(df):
-    """Generate KML string from polygon dataframe."""
+    """Generate valid KML from a polygon dataframe.
+    Converts WKT geometry to proper KML <coordinates> format (lon,lat,0 per point).
+    """
     if df is None or df.empty:
         return ""
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>']
+
+    try:
+        from shapely.wkt import loads as _wl
+    except ImportError:
+        return ""
+
+    def _xesc(s):
+        return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def _poly_to_kml(geom):
+        """Convert a Shapely Polygon to KML <Polygon> element."""
+        ext = " ".join(f"{x},{y},0" for x, y in geom.exterior.coords)
+        inner = "".join(
+            f"<innerBoundaryIs><LinearRing>"
+            f"<coordinates>{' '.join(f'{x},{y},0' for x, y in ring.coords)}</coordinates>"
+            f"</LinearRing></innerBoundaryIs>"
+            for ring in geom.interiors
+        )
+        return (
+            f"<Polygon><outerBoundaryIs><LinearRing>"
+            f"<coordinates>{ext}</coordinates>"
+            f"</LinearRing></outerBoundaryIs>{inner}</Polygon>"
+        )
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        '<Style id="ps"><LineStyle><color>ff0B8A7A</color><width>2</width></LineStyle>'
+        '<PolyStyle><color>550B8A7A</color></PolyStyle></Style>',
+    ]
+
+    wkt_col = "Polygon WKT" if "Polygon WKT" in df.columns else "boundary"
+
     for _, row in df.iterrows():
-        name = row.get("Cluster_Code", row.get("cluster_code", "Cluster"))
-        desc = f"Hub: {row.get('hub_name', row.get('Hub Name', ''))} | Rate: ₹{row.get('surge_amount', row.get('Description', ''))} | Category: {row.get('Cluster_Category', row.get('cluster_category', ''))}"
-        boundary = row.get("boundary", row.get("Polygon WKT", ""))
-        lines.append(f"<Placemark><name>{name}</name><description>{desc}</description>")
-        lines.append(f"<Polygon><outerBoundaryIs><LinearRing><coordinates>{boundary}</coordinates></LinearRing></outerBoundaryIs></Polygon>")
-        lines.append("</Placemark>")
+        wkt = row.get(wkt_col, "")
+        if not wkt or (isinstance(wkt, float) and np.isnan(wkt)):
+            continue
+        try:
+            geom = _wl(str(wkt))
+        except Exception:
+            continue
+
+        name = _xesc(row.get("Cluster_Code", row.get("cluster_code", "")))
+        hub  = _xesc(row.get("Hub Name", row.get("hub_name", "")))
+        rate = _xesc(row.get("Description", row.get("surge_amount", "")))
+        cat  = _xesc(row.get("Cluster_Category", row.get("cluster_category", "")))
+        desc = f"Hub: {hub} | Rate: ₹{rate} | Category: {cat}"
+
+        parts = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
+        for part in parts:
+            lines.append(
+                f"<Placemark><name>{name}</name>"
+                f"<description>{desc}</description>"
+                f"<styleUrl>#ps</styleUrl>"
+                f"{_poly_to_kml(part)}</Placemark>"
+            )
+
     lines.append("</Document></kml>")
     return "\n".join(lines)

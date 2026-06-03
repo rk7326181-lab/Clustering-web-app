@@ -3048,10 +3048,11 @@ elif nav.startswith("5"):
                                     geom_kml = _kml_coords(pg)
                                     name_val = _xml_escape(r.get("cluster_code", r.get("hub_name", "")))
                                     desc_fields = []
-                                    for k in ["hub_name", "hub_id", "cluster_code", "pincode", "cluster_category", "surge_amount", "is_active"]:
+                                    for k in ["hub_name", "cluster_code", "pincode", "cluster_category", "surge_amount"]:
                                         if k in r and not pd.isna(r[k]):
-                                            desc_fields.append(f"<b>{k}</b>: {_xml_escape(r[k])}")
-                                    desc = _xml_escape("<br/>".join(desc_fields))
+                                            desc_fields.append(f"{k}: {_xml_escape(str(r[k]))}")
+                                    # Single escape only — no HTML tags to avoid double-escaping
+                                    desc = " | ".join(desc_fields)
                                     kml_placemarks.append(
                                         f"<Placemark><name>{name_val}</name>"
                                         f"<description>{desc}</description>{geom_kml}</Placemark>"
