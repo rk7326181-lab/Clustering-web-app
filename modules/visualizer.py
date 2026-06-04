@@ -126,6 +126,95 @@ class OsrmRouteDistanceTool(MacroElement):
     """) if Template else None
 
 
+class _PolygonDownloadTool(MacroElement):
+    """MacroElement that injects the polygon download button + localStorage
+    listeners into the Folium map script block.  Using MacroElement (not
+    m.get_root().html) ensures st_folium includes this in its iframe render.
+    """
+    _template = Template("""
+    {% macro script(this, kwargs) %}
+    (function(){
+        var _POLY_META = {{ this.meta_json | safe }};
+        var _LS_KEY = 'sfx_edited_polygons';
+        var mapObj = {{ this._parent.get_name() }};
+        localStorage.removeItem(_LS_KEY);
+
+        function _getOuter(ll){
+            if(Array.isArray(ll)&&ll.length>0&&Array.isArray(ll[0]))return ll[0];
+            return ll;
+        }
+        function _layerToEntry(layer){
+            if(!layer.getLatLngs)return null;
+            var outer=_getOuter(layer.getLatLngs());
+            if(!outer||!outer.length)return null;
+            var coords=outer.map(function(p){return[p.lng,p.lat];});
+            if(coords.length>0){var f=coords[0],l=coords[coords.length-1];if(f[0]!==l[0]||f[1]!==l[1])coords.push([f[0],f[1]]);}
+            var sx=0,sy=0,n=outer.length;
+            outer.forEach(function(p){sx+=p.lng;sy+=p.lat;});
+            return{coords:coords,cx:sx/n,cy:sy/n};
+        }
+        function _saveAllToLS(){
+            var dI=window['drawnItems_{{this.fg_name}}']||window.drawnItems;
+            if(!dI)return;
+            var entries=[];
+            dI.eachLayer(function(layer){var e=_layerToEntry(layer);if(e)entries.push(e);});
+            localStorage.setItem(_LS_KEY,JSON.stringify(entries));
+        }
+        mapObj.on('draw:edited',function(){setTimeout(_saveAllToLS,0);});
+        mapObj.on('draw:created',function(){setTimeout(_saveAllToLS,0);});
+        mapObj.on('draw:deleted',function(){setTimeout(_saveAllToLS,0);});
+
+        function _closestMeta(cx,cy){
+            var best=null,bd=99999;
+            Object.keys(_POLY_META).forEach(function(k){
+                var p=k.split('|'),d=Math.sqrt(Math.pow(parseFloat(p[0])-cx,2)+Math.pow(parseFloat(p[1])-cy,2));
+                if(d<bd){bd=d;best=_POLY_META[k];}
+            });
+            return best||{};
+        }
+        function _q(v){return'"'+String(v||'').replace(/"/g,'""')+'"';}
+
+        window._downloadEditedPolygons=function(){
+            var saved=localStorage.getItem(_LS_KEY),entries=null;
+            if(saved){try{entries=JSON.parse(saved);}catch(e){}}
+            if(!entries||!entries.length){
+                var dI=window['drawnItems_{{this.fg_name}}']||window.drawnItems;
+                if(dI){_saveAllToLS();try{entries=JSON.parse(localStorage.getItem(_LS_KEY)||'[]');}catch(e){entries=[];}}
+            }
+            if(!entries||!entries.length){alert('Edit polygons, click ✓ Save on the map toolbar, then try again.');return;}
+            var rows=['"cluster_code","hub_name","pincode","description","cluster_category","geometry_wkt"'];
+            entries.forEach(function(e){
+                var m=_closestMeta(e.cx,e.cy);
+                var wkt='POLYGON(('+e.coords.map(function(c){return c[0]+' '+c[1];}).join(', ')+'))';
+                rows.push([_q(m.cluster_code),_q(m.hub_name),_q(m.pincode),_q(m.description),_q(m.cluster_category),_q(wkt)].join(','));
+            });
+            var blob=new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8;'});
+            var url=URL.createObjectURL(blob),a=document.createElement('a');
+            a.href=url;a.download='edited_polygons.csv';
+            document.body.appendChild(a);a.click();document.body.removeChild(a);
+            URL.revokeObjectURL(url);localStorage.removeItem(_LS_KEY);
+        };
+
+        // Inject the download button into the map container
+        var container=document.createElement('div');
+        container.id='_poly_export_bar';
+        container.style.cssText='position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:9999;pointer-events:auto;';
+        var btn=document.createElement('button');
+        btn.innerHTML='&#11015; Save / Download Edited Polygons (CSV)';
+        btn.style.cssText='background:#0B8A7A;color:#fff;border:none;border-radius:8px;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,.35);font-family:Arial,sans-serif;';
+        btn.onclick=window._downloadEditedPolygons;
+        container.appendChild(btn);
+        document.body.appendChild(container);
+    })();
+    {% endmacro %}
+    """) if Template else None  # type: ignore[arg-type]
+
+    def __init__(self, meta_json, fg_name):
+        super().__init__()
+        self.meta_json = meta_json
+        self.fg_name = fg_name
+
+
 # Distinct pincode colors — 30 colors to cycle through within each hub
 _PINCODE_PALETTE = [
     "#E6194B", "#3CB44B", "#4363D8", "#F58231", "#911EB4",
@@ -953,142 +1042,21 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
     # then uses it as drawnItems, making existing polygons editable/deletable.
     fg.add_to(m)
 
-    # ── Client-side polygon save/download ────────────────────────────────
-    # KEY INSIGHT: clicking Leaflet-Draw's ✓ Save fires draw:edited, which
-    # causes Streamlit to re-run and rebuild the map from original data —
-    # window.drawnItems is reset to original polygons BEFORE the user can
-    # click the download button.
-    # FIX: listen to draw:edited/draw:created/draw:deleted events and save
-    # the CURRENT edited state to localStorage immediately. localStorage
-    # persists across Streamlit re-runs. The download button reads from
-    # localStorage, not from window.drawnItems.getLayers().
+    # ── Client-side polygon save/download (MacroElement approach) ──────────
+    # st_folium renders Folium MacroElements (like plugins) but NOT elements
+    # added to m.get_root().html.  We use PolygonDownloadTool (MacroElement)
+    # so the download button and localStorage listeners are included in
+    # st_folium's iframe rendering.
     import json as _json
     _meta_js = _json.dumps(poly_meta)
-    _export_html = f"""
-<div id="_poly_export_bar" style="position:fixed;bottom:12px;left:50%;transform:translateX(-50%);
-     z-index:9999;display:flex;gap:8px;align-items:center;pointer-events:auto">
-  <button onclick="_downloadEditedPolygons()" style="background:#0B8A7A;color:#fff;border:none;
-    border-radius:8px;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;
-    box-shadow:0 3px 10px rgba(0,0,0,.35);font-family:Arial,sans-serif;
-    transition:opacity .15s" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
-    ⬇ Save / Download Edited Polygons (CSV)
-  </button>
-</div>
-<script>
-var _POLY_META = {_meta_js};
-var _LS_KEY = 'sfx_edited_polygons';
-
-// Clear stale data from previous sessions
-localStorage.removeItem(_LS_KEY);
-
-function _getOuterRing(ll) {{
-  // L.polygon.getLatLngs() returns [[LatLng,...]] for simple polygon
-  // or [[LatLng,...],[LatLng,...]] for polygon with holes.
-  // The first ring is always the exterior.
-  if (Array.isArray(ll) && ll.length > 0 && Array.isArray(ll[0])) {{
-    return ll[0];
-  }}
-  return ll;
-}}
-
-function _layerToEntry(layer) {{
-  if (!layer.getLatLngs) return null;
-  var ll = layer.getLatLngs();
-  var outer = _getOuterRing(ll);
-  if (!outer || !outer.length) return null;
-  var coords = outer.map(function(p) {{ return [p.lng, p.lat]; }});
-  // Close the ring if not already closed
-  if (coords.length > 0) {{
-    var f = coords[0], l = coords[coords.length-1];
-    if (f[0] !== l[0] || f[1] !== l[1]) coords.push([f[0], f[1]]);
-  }}
-  var sx=0, sy=0, n=outer.length;
-  outer.forEach(function(p) {{ sx+=p.lng; sy+=p.lat; }});
-  return {{ coords:coords, cx:sx/n, cy:sy/n }};
-}}
-
-function _saveAllToLS() {{
-  if (!window.drawnItems) return;
-  var entries = [];
-  window.drawnItems.eachLayer(function(layer) {{
-    var e = _layerToEntry(layer);
-    if (e) entries.push(e);
-  }});
-  localStorage.setItem(_LS_KEY, JSON.stringify(entries));
-}}
-
-// Save IMMEDIATELY when any draw event fires — before Streamlit re-renders
-function _onDrawEvent(e) {{
-  // Give Leaflet a tick to commit the edit to the layer, then save
-  setTimeout(_saveAllToLS, 0);
-}}
-
-function _attachDrawListeners(mapObj) {{
-  mapObj.on('draw:edited', _onDrawEvent);
-  mapObj.on('draw:created', _onDrawEvent);
-  mapObj.on('draw:deleted', _onDrawEvent);
-}}
-
-// Attach as soon as the map variable is available
-(function waitForMap() {{
-  var mapEl = document.querySelector('.leaflet-container');
-  if (mapEl && mapEl._leaflet_id) {{
-    // Find the Leaflet map object
-    Object.keys(window).forEach(function(k) {{
-      if (window[k] && window[k]._container === mapEl && window[k].on) {{
-        _attachDrawListeners(window[k]);
-      }}
-    }});
-  }} else {{
-    setTimeout(waitForMap, 100);
-  }}
-}})();
-
-function _closestMeta(cx, cy) {{
-  var best = null, bd = 99999;
-  Object.keys(_POLY_META).forEach(function(k) {{
-    var p = k.split('|');
-    var d = Math.sqrt(Math.pow(parseFloat(p[0])-cx,2)+Math.pow(parseFloat(p[1])-cy,2));
-    if (d < bd) {{ bd=d; best=_POLY_META[k]; }}
-  }});
-  return best || {{}};
-}}
-
-function _downloadEditedPolygons() {{
-  // Try localStorage first (has edited state from draw:edited event)
-  var saved = localStorage.getItem(_LS_KEY);
-  var entries = null;
-  if (saved) {{
-    try {{ entries = JSON.parse(saved); }} catch(e) {{ entries = null; }}
-  }}
-  // Fallback: read directly from window.drawnItems (works if no re-run happened)
-  if (!entries || !entries.length) {{
-    if (window.drawnItems) {{
-      _saveAllToLS();
-      try {{ entries = JSON.parse(localStorage.getItem(_LS_KEY)||'[]'); }} catch(e) {{ entries=[]; }}
-    }}
-  }}
-  if (!entries || !entries.length) {{
-    alert('No polygon data found. Edit polygons and click Save on the toolbar first.');
-    return;
-  }}
-  var rows = ['"cluster_code","hub_name","pincode","description","cluster_category","geometry_wkt"'];
-  function q(v){{return'"'+String(v||'').replace(/"/g,'""')+'"';}}
-  entries.forEach(function(e) {{
-    var meta = _closestMeta(e.cx, e.cy);
-    var wkt = 'POLYGON((' + e.coords.map(function(c){{return c[0]+' '+c[1];}}).join(', ') + '))';
-    rows.push([q(meta.cluster_code),q(meta.hub_name),q(meta.pincode),q(meta.description),q(meta.cluster_category),q(wkt)].join(','));
-  }});
-  var blob = new Blob([rows.join('\\n')], {{type:'text/csv;charset=utf-8;'}});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href=url; a.download='edited_polygons.csv';
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
-  localStorage.removeItem(_LS_KEY);
-}}
-</script>"""
-    m.get_root().html.add_child(folium.Element(_export_html))
+    # PolygonDownloadTool is a MacroElement — it renders as JavaScript inside
+    # the Folium map's script block and IS included by st_folium (unlike
+    # elements added to m.get_root().html which are excluded by st_folium).
+    if Template and _meta_js:
+        _PolygonDownloadTool(
+            meta_json=_meta_js,
+            fg_name=fg.get_name(),
+        ).add_to(m)
 
     MeasureControl(
         position="topleft",
@@ -1201,43 +1169,15 @@ def create_editable_live_cluster_map(lcd, lhd=None, hub_filter=None, satellite=F
 
     fg.add_to(m)
 
-    # Client-side download button for live cluster polygons
+    # Client-side download button — use MacroElement (not get_root().html)
+    # so st_folium includes it in the iframe render.
     import json as _json5
     _lc_meta_js = _json5.dumps(lc_meta)
-    _lc_export = f"""
-<div style="position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:9999">
-  <button onclick="_downloadLcPolygons()" style="background:#0B8A7A;color:#fff;border:none;
-    border-radius:8px;padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;
-    box-shadow:0 3px 10px rgba(0,0,0,.35);font-family:Arial,sans-serif">
-    ⬇ Save / Download Edited Clusters (CSV)
-  </button>
-</div>
-<script>
-var _LC_META = {_lc_meta_js};
-function _closestLcMeta(cx,cy){{var best=null,bd=99999;Object.keys(_LC_META).forEach(function(k){{var p=k.split('|'),d=Math.sqrt(Math.pow(parseFloat(p[0])-cx,2)+Math.pow(parseFloat(p[1])-cy,2));if(d<bd){{bd=d;best=_LC_META[k];}}}});return best||{{}};}}
-function _downloadLcPolygons(){{
-  if(!window.drawnItems){{alert('No editable polygons.');return;}}
-  var layers=window.drawnItems.getLayers();
-  if(!layers.length){{alert('No polygons to export.');return;}}
-  var rows=['"cluster_code","hub_name","pincode","surge_amount","cluster_category","geometry_wkt"'];
-  layers.forEach(function(layer){{
-    if(!layer.getLatLngs)return;
-    var ll=layer.getLatLngs();
-    var outer=(Array.isArray(ll[0])&&Array.isArray(ll[0][0]))?ll[0]:(Array.isArray(ll[0])?ll[0]:ll);
-    var sx=0,sy=0,n=outer.length;
-    outer.forEach(function(p){{sx+=p.lng||p[1];sy+=p.lat||p[0];}});
-    var meta=_closestLcMeta(sx/n,sy/n);
-    var wkt='POLYGON(('+outer.map(function(p){{return(p.lng||p[1])+' '+(p.lat||p[0]);}}).join(',')+'))';
-    function q(v){{return'"'+String(v||'').replace(/"/g,'""')+'"';}}
-    rows.push([q(meta.cluster_code),q(meta.hub_name),q(meta.pincode),q(meta.surge_amount),q(meta.cluster_category),q(wkt)].join(','));
-  }});
-  var blob=new Blob([rows.join('\\n')],{{type:'text/csv;charset=utf-8;'}});
-  var url=URL.createObjectURL(blob);
-  var a=document.createElement('a');a.href=url;a.download='edited_clusters.csv';
-  document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
-}}
-</script>"""
-    m.get_root().html.add_child(folium.Element(_lc_export))
+    if _JT and _lc_meta_js:
+        _PolygonDownloadTool(
+            meta_json=_lc_meta_js,
+            fg_name=fg.get_name(),
+        ).add_to(m)
 
     # Hub markers
     _hub_src = None
