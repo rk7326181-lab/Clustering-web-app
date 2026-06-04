@@ -1675,25 +1675,29 @@ elif nav.startswith("3"):
                     map_out_s3 = None
                     st.warning("Could not render editable map — no polygons to display for this hub.")
 
-                # ── BUFFER all_drawings in session state ──────────────────────
-                # Root cause: streamlit-folium calls updateComponentValue() on
-                # EVERY onRender — so after st.rerun() the map rebuilds with
-                # original data and all_drawings is overwritten with originals.
-                # Fix: store all_drawings immediately, then use an explicit
-                # "Save My Edits" button so the user controls when to save.
+                # ── Buffer all_drawings & always show Save button ─────────────
+                # Buffer drawings whenever they arrive (may be None or [] on some renders)
                 if map_out_s3 and map_out_s3.get("all_drawings"):
                     st.session_state["_s3_drawings"] = map_out_s3["all_drawings"]
 
-                # ── Save My Edits button ───────────────────────────────────────
-                _s3_buffered = st.session_state.get("_s3_drawings", [])
-                if _s3_buffered:
-                    st.markdown('<div class="sfx-ok">✏️ Unsaved edits detected — click Save below.</div>',
-                                unsafe_allow_html=True)
-                    _sc1, _sc2 = st.columns(2)
-                    with _sc1:
-                        if st.button("💾 Save My Edits", type="primary", key="s3_apply_edits"):
-                            from shapely.geometry import Polygon as _SP3
-                            from shapely.wkt import loads as _wl3
+                # ALWAYS show Save + Undo in edit mode — don't depend on buffer
+                # being populated (it may be empty on the render the user expects it)
+                st.markdown('<div class="sfx-header">💾 Save Changes</div>', unsafe_allow_html=True)
+                st.info(
+                    "After dragging vertices and clicking **✓ Save** on the map toolbar, "
+                    "click **Save My Edits** below to save the changes permanently."
+                )
+                _sc1, _sc2 = st.columns(2)
+                with _sc1:
+                    if st.button("💾 Save My Edits", type="primary", key="s3_apply_edits"):
+                        from shapely.geometry import Polygon as _SP3
+                        from shapely.wkt import loads as _wl3
+                        # Use buffered drawings first; fall back to current map_out_s3
+                        _drawings_to_save = st.session_state.get("_s3_drawings") or \
+                                            (map_out_s3.get("all_drawings") if map_out_s3 else None)
+                        if not _drawings_to_save:
+                            st.error("No polygon data found. Edit a polygon, click ✓ Save on the toolbar, then try again.")
+                        else:
                             _poly3 = st.session_state.get("polygon_records_df").copy()
                             _wc3 = "Polygon WKT" if "Polygon WKT" in _poly3.columns else "boundary"
                             _undo3 = st.session_state.setdefault("edit_undo_stack", [])
@@ -1709,7 +1713,7 @@ elif nav.startswith("3"):
                                 except Exception:
                                     continue
                             _matched3, _new3, _saved3 = set(), [], 0
-                            for _drw3 in _s3_buffered:
+                            for _drw3 in _drawings_to_save:
                                 if _drw3.get("geometry", {}).get("type") != "Polygon":
                                     continue
                                 _co3 = _drw3["geometry"].get("coordinates", [[]])[0]
@@ -1749,15 +1753,10 @@ elif nav.startswith("3"):
                             add_log(f"[{hub_filter}] saved {_saved3} edits, {len(_del3)} deleted", "success")
                             st.success(f"✅ Saved {_saved3} polygon edits!" + (f" {len(_new3)} new polygon(s) below." if _new3 else ""))
                             st.rerun()
-                    with _sc2:
-                        if st.session_state.get("edit_undo_stack") and st.button("↶ Undo", key="s3_undo_btn"):
-                            st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
-                            st.session_state["_s3_drawings"] = []
-                            add_log("Undid last polygon edit", "warning")
-                            st.rerun()
-                elif st.session_state.get("edit_undo_stack"):
-                    if st.button("↶ Undo Last Edit", key="s3_undo_btn"):
+                with _sc2:
+                    if st.session_state.get("edit_undo_stack") and st.button("↶ Undo Last Edit", key="s3_undo_btn"):
                         st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
+                        st.session_state["_s3_drawings"] = []
                         add_log("Undid last polygon edit", "warning")
                         st.rerun()
 
