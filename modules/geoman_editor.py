@@ -132,6 +132,23 @@ def build_geoman_editor_html(
   .leaflet-draw-toolbar a:hover{{background-color:#334155!important;color:#fff!important;}}
   .leaflet-draw-edit-save{{background-color:#0B8A7A!important;color:#fff!important;}}
   .leaflet-draw-edit-remove{{background-color:#DC2626!important;color:#fff!important;}}
+
+  /* ── New polygon modal ── */
+  #poly-modal{{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;}}
+  #poly-modal.open{{display:flex;}}
+  #poly-form{{background:#1e293b;border:1px solid #0B8A7A;border-radius:10px;padding:20px 24px;min-width:320px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5);}}
+  #poly-form h3{{margin:0 0 14px;font-size:14px;color:#4AEDC4;font-weight:700;letter-spacing:0.03em;}}
+  .pf-row{{display:flex;flex-direction:column;gap:3px;margin-bottom:10px;}}
+  .pf-row label{{font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;}}
+  .pf-row input,.pf-row select{{background:#0f172a;border:1px solid #475569;border-radius:5px;color:#f1f5f9;padding:6px 10px;font-size:13px;outline:none;}}
+  .pf-row input:focus,.pf-row select:focus{{border-color:#0B8A7A;box-shadow:0 0 0 2px #0B8A7A33;}}
+  .pf-row input.required-err{{border-color:#EF4444;}}
+  #pf-actions{{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}}
+  #pf-save{{background:#0B8A7A;color:#fff;border:none;border-radius:5px;padding:7px 18px;font-size:13px;font-weight:700;cursor:pointer;}}
+  #pf-save:hover{{background:#097A6C;}}
+  #pf-cancel{{background:#334155;color:#94a3b8;border:none;border-radius:5px;padding:7px 14px;font-size:13px;cursor:pointer;}}
+  #pf-cancel:hover{{background:#475569;color:#fff;}}
+  #pf-err{{font-size:11px;color:#EF4444;min-height:14px;margin-top:4px;}}
 </style>
 </head>
 <body>
@@ -156,6 +173,46 @@ def build_geoman_editor_html(
 
 <div id="map"></div>
 <div id="outbox">Click "Copy Edited Polygons" after editing to export your changes as CSV.</div>
+
+<!-- New polygon metadata modal -->
+<div id="poly-modal">
+  <div id="poly-form">
+    <h3>📍 Name Your New Polygon</h3>
+    <div class="pf-row">
+      <label>Cluster Code *</label>
+      <input id="pf-cc" type="text" placeholder="e.g. 533288_B" autocomplete="off"/>
+    </div>
+    <div class="pf-row">
+      <label>Hub Name</label>
+      <input id="pf-hub" type="text" placeholder="e.g. RJY_Rampachodavaram" autocomplete="off"/>
+    </div>
+    <div class="pf-row">
+      <label>Pincode</label>
+      <input id="pf-pin" type="text" placeholder="e.g. 533288" maxlength="10" autocomplete="off"/>
+    </div>
+    <div class="pf-row">
+      <label>Rate (₹)</label>
+      <input id="pf-rate" type="number" placeholder="e.g. 1" min="0" step="1"/>
+    </div>
+    <div class="pf-row">
+      <label>Cluster Category</label>
+      <select id="pf-cat">
+        <option value="">-- Select --</option>
+        <option value="C7">C7</option>
+        <option value="C11">C11</option>
+        <option value="C15">C15</option>
+        <option value="C20">C20</option>
+        <option value="C25">C25</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div id="pf-err"></div>
+    <div id="pf-actions">
+      <button id="pf-cancel">Cancel</button>
+      <button id="pf-save">✅ Save Polygon</button>
+    </div>
+  </div>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
@@ -234,14 +291,86 @@ if (FC && FC.features && FC.features.length > 0) {{
 document.getElementById('cnt').textContent = polyLayers.length + ' polygons';
 setStatus('Polygons loaded. Use the buttons below or Leaflet toolbar (top-left) to edit.');
 
+// ── New polygon modal ──────────────────────────────────────────────────────
+var _pendingLayer = null;
+var DEFAULT_HUB = '{hub_filter if hub_filter not in ("All Hubs", "All") else ""}';
+
+function openPolyModal(layer) {{
+  _pendingLayer = layer;
+  document.getElementById('pf-cc').value = '';
+  document.getElementById('pf-hub').value = DEFAULT_HUB;
+  document.getElementById('pf-pin').value = '';
+  document.getElementById('pf-rate').value = '';
+  document.getElementById('pf-cat').value = '';
+  document.getElementById('pf-err').textContent = '';
+  document.getElementById('pf-cc').classList.remove('required-err');
+  document.getElementById('poly-modal').classList.add('open');
+  setTimeout(function(){{ document.getElementById('pf-cc').focus(); }}, 80);
+}}
+
+function closePolyModal(discard) {{
+  document.getElementById('poly-modal').classList.remove('open');
+  if (discard && _pendingLayer) {{
+    drawnItems.removeLayer(_pendingLayer);
+    var idx = polyLayers.indexOf(_pendingLayer);
+    if (idx > -1) polyLayers.splice(idx, 1);
+    document.getElementById('cnt').textContent = drawnItems.getLayers().length + ' polygons';
+    setStatus('Polygon discarded.');
+  }}
+  _pendingLayer = null;
+}}
+
+document.getElementById('pf-save').addEventListener('click', function() {{
+  var cc = document.getElementById('pf-cc').value.trim();
+  if (!cc) {{
+    document.getElementById('pf-cc').classList.add('required-err');
+    document.getElementById('pf-err').textContent = 'Cluster Code is required.';
+    return;
+  }}
+  var hub  = document.getElementById('pf-hub').value.trim();
+  var pin  = document.getElementById('pf-pin').value.trim();
+  var rate = document.getElementById('pf-rate').value.trim();
+  var cat  = document.getElementById('pf-cat').value;
+
+  if (_pendingLayer) {{
+    _pendingLayer._props = {{
+      cluster_code: cc,
+      hub_name: hub,
+      pincode: pin,
+      description: rate,
+      cluster_category: cat
+    }};
+    _pendingLayer.bindPopup(
+      '<div style="font-family:Arial;font-size:12px">' +
+      '<b>' + cc + '</b><br>' +
+      'Hub: ' + hub + '<br>' +
+      'Pincode: ' + pin + '<br>' +
+      'Rate: ₹' + rate + '</div>'
+    );
+    _pendingLayer.bindTooltip(cc, {{sticky:true}});
+  }}
+  document.getElementById('cnt').textContent = drawnItems.getLayers().length + ' polygons';
+  setStatus('✅ Polygon "' + cc + '" saved. Click "Copy Edited Polygons" to export all.');
+  closePolyModal(false);
+}});
+
+document.getElementById('pf-cancel').addEventListener('click', function() {{ closePolyModal(true); }});
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape' && document.getElementById('poly-modal').classList.contains('open')) {{
+    closePolyModal(true);
+  }}
+  if (e.key === 'Enter' && document.getElementById('poly-modal').classList.contains('open')) {{
+    document.getElementById('pf-save').click();
+  }}
+}});
+
 // ── Event listeners ────────────────────────────────────────────────────────
 map.on(L.Draw.Event.CREATED, function(e) {{
   var layer = e.layer;
-  layer._props = {{ cluster_code:'NEW_'+Date.now(), hub_name:'', pincode:'', description:'', cluster_category:'' }};
+  layer._props = {{ cluster_code:'', hub_name: DEFAULT_HUB, pincode:'', description:'', cluster_category:'' }};
   drawnItems.addLayer(layer);
   polyLayers.push(layer);
-  document.getElementById('cnt').textContent = drawnItems.getLayers().length + ' polygons';
-  setStatus('✅ New polygon drawn. Click "Copy Edited Polygons" to export.');
+  openPolyModal(layer);
 }});
 
 map.on(L.Draw.Event.EDITED, function(e) {{
