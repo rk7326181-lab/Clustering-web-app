@@ -1657,7 +1657,7 @@ elif nav.startswith("3"):
                     # Use components.html() — st_folium fails on large Folium HTML
                     # with MacroElement (appendChild error). components.html() renders
                     # the HTML directly so the download button works correctly.
-                    components.html(m._repr_html_(), height=640, scrolling=False)
+                    components.html(m.get_root().render(), height=640, scrolling=False)
                 else:
                     st.warning("Could not render editable map — no polygons to display for this hub.")
                 map_out_s3 = None  # components.html() has no return value
@@ -2102,7 +2102,9 @@ elif nav.startswith("4"):
                         },
                         edit_options={"poly": {"allowIntersection": False}},
                     ).add_to(m)
-                    components.html(m._repr_html_(), height=720, scrolling=False)
+                    # m._repr_html_() wraps in a Jupyter IFrame — use get_root().render()
+                    # to get the raw standalone HTML suitable for components.html().
+                    components.html(m.get_root().render(), height=720, scrolling=False)
                 else:
                     st.warning("Could not render editable map — no polygon data for this hub.")
                 map_out_s4 = None  # components.html() has no return value
