@@ -198,26 +198,26 @@ def build_geoman_editor_html(
       <label>Cluster Category</label>
       <select id="pf-cat">
         <option value="">-- Select --</option>
-        <option value="C1">C1 — ₹1</option>
-        <option value="C2">C2 — ₹2</option>
-        <option value="C3">C3 — ₹3</option>
-        <option value="C4">C4 — ₹4</option>
-        <option value="C5">C5 — ₹5</option>
-        <option value="C6">C6 — ₹6</option>
-        <option value="C7">C7 — ₹7</option>
-        <option value="C8">C8 — ₹8</option>
-        <option value="C9">C9 — ₹9</option>
-        <option value="C10">C10 — ₹10</option>
-        <option value="C11">C11 — ₹11</option>
-        <option value="C12">C12 — ₹12</option>
-        <option value="C13">C13 — ₹13</option>
-        <option value="C14">C14 — ₹14</option>
-        <option value="C15">C15 — ₹15</option>
-        <option value="C16">C16 — ₹16</option>
-        <option value="C17">C17 — ₹17</option>
-        <option value="C18">C18 — ₹18</option>
-        <option value="C19">C19 — ₹19</option>
-        <option value="C20">C20 — ₹20</option>
+        <option value="C1">C1 — ₹0.00</option>
+        <option value="C2">C2 — ₹0.50</option>
+        <option value="C3">C3 — ₹1.00</option>
+        <option value="C4">C4 — ₹1.50</option>
+        <option value="C5">C5 — ₹2.00</option>
+        <option value="C6">C6 — ₹2.50</option>
+        <option value="C7">C7 — ₹3.00</option>
+        <option value="C8">C8 — ₹3.50</option>
+        <option value="C9">C9 — ₹4.00</option>
+        <option value="C10">C10 — ₹4.50</option>
+        <option value="C11">C11 — ₹5.00</option>
+        <option value="C12">C12 — ₹6.00</option>
+        <option value="C13">C13 — ₹7.00</option>
+        <option value="C14">C14 — ₹8.00</option>
+        <option value="C15">C15 — ₹9.00</option>
+        <option value="C16">C16 — ₹10.00</option>
+        <option value="C17">C17 — ₹11.00</option>
+        <option value="C18">C18 — ₹12.00</option>
+        <option value="C19">C19 — ₹13.00</option>
+        <option value="C20">C20 — ₹15.00</option>
       </select>
     </div>
     <div id="pf-err"></div>
