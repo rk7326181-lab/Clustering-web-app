@@ -1624,11 +1624,11 @@ elif nav.startswith("3"):
             st.session_state.pop("_s3_import_done", None)
         if edit_polygons:
             st.info(
-                "**How to edit polygons:**  \n"
-                "1️⃣ Click the **✏ Edit icon** on the map toolbar  \n"
-                "2️⃣ Drag any vertex to reshape — or click 🗑 Delete to remove a polygon  \n"
-                "3️⃣ Click **✓ Save** on the toolbar  \n"
-                "4️⃣ Click **💾 Save My Edits** button below the map"
+                "**Leaflet-Geoman editor — reliable vertex editing:**  \n"
+                "1️⃣ Click **✏ Edit** (pencil icon) on the map left toolbar — all polygons become editable  \n"
+                "2️⃣ Drag any **orange vertex handle** to reshape the polygon boundary  \n"
+                "3️⃣ Click **📋 Copy Edited GeoJSON** button (top of map) — copies CSV to clipboard  \n"
+                "4️⃣ Paste into the **Import field below the map** → click **Save**"
             )
         try:
             import folium
@@ -1636,123 +1636,83 @@ elif nav.startswith("3"):
             import streamlit.components.v1 as components
             from modules.visualizer import create_polygon_map_cached, create_editable_polygon_map, _df_hash
             if edit_polygons:
-                m, edit_fg = create_editable_polygon_map(pdf, cdf, hub_filter=hub_filter, satellite=False)
-                if m is not None and edit_fg is not None:
-                    from folium.plugins import Draw
-                    # Pass the existing polygon FeatureGroup to Draw so leaflet-draw's
-                    # Edit/Delete tools operate on the existing polygons (not just on
-                    # new ones drawn during the session).
-                    Draw(
-                        export=False,
-                        position="topleft",
-                        feature_group=edit_fg,
-                        show_geometry_on_click=False,
-                        draw_options={
-                            "polyline": False,
-                            "circle": False,
-                            "rectangle": False,
-                            "marker": False,
-                            "circlemarker": False,
-                            "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}},
-                        },
-                        edit_options={"poly": {"allowIntersection": False}},
-                    ).add_to(m)
-                    # Use components.html() — st_folium fails on large Folium HTML
-                    # with MacroElement (appendChild error). components.html() renders
-                    # the HTML directly so the download button works correctly.
-                    _fg_js = edit_fg.get_name()
-                    m.get_root().script.add_child(
-                        folium.Element(f"window.drawnItems = {_fg_js};")
-                    )
-                    map_out_s3 = st_folium(
-                        m,
-                        width=None,
-                        height=600,
-                        returned_objects=["all_drawings", "last_active_drawing"],
-                        key=f"s3_edit_map_{hub_filter}",
-                    )
-                else:
-                    map_out_s3 = None
-                    st.warning("Could not render editable map — no polygons to display for this hub.")
+                # ── GEOMAN EDITOR (replaces unreliable streamlit-folium editing) ──
+                from modules.geoman_editor import build_geoman_editor_html
+                _geoman_html = build_geoman_editor_html(pdf, hub_filter=hub_filter, height=660)
+                components.html(_geoman_html, height=660, scrolling=False)
+                # Legacy streamlit-folium edit map (kept as fallback for data capture)
+                map_out_s3 = None
+                # Buffer all_drawings if available from previous interaction
+                if False:  # Disabled — Geoman handles editing directly
+                    m, edit_fg = create_editable_polygon_map(pdf, cdf, hub_filter=hub_filter, satellite=False)
+                # Geoman handles editing — no st_folium needed here
+                map_out_s3 = None
 
-                # ── Buffer all_drawings & always show Save button ─────────────
-                # Buffer drawings whenever they arrive (may be None or [] on some renders)
-                if map_out_s3 and map_out_s3.get("all_drawings"):
-                    st.session_state["_s3_drawings"] = map_out_s3["all_drawings"]
-
-                # ALWAYS show Save + Undo in edit mode — don't depend on buffer
-                # being populated (it may be empty on the render the user expects it)
-                st.markdown('<div class="sfx-header">💾 Save Changes</div>', unsafe_allow_html=True)
+                # ── Import edited polygons (pasted from Geoman map) ───────────
+                st.markdown('<div class="sfx-header">💾 Import Edited Polygons</div>', unsafe_allow_html=True)
                 st.info(
-                    "After dragging vertices and clicking **✓ Save** on the map toolbar, "
-                    "click **Save My Edits** below to save the changes permanently."
+                    "**Steps:** In the map above → click **✏ Edit** toolbar icon → drag vertices → "
+                    "click **📋 Copy Edited GeoJSON** button → paste below → click **Save**."
                 )
                 _sc1, _sc2 = st.columns(2)
+                # Show Save button only when there's pasted data
+                _geoman_paste = st.text_area(
+                    "Paste edited polygon CSV here",
+                    key="s3_geoman_paste",
+                    placeholder='Paste CSV from "Copy Edited GeoJSON" button above...',
+                    height=100,
+                )
+                # Clear paste guard when textarea is cleared
+                if not _geoman_paste:
+                    st.session_state.pop("_s3_import_done", None)
                 with _sc1:
-                    if st.button("💾 Save My Edits", type="primary", key="s3_apply_edits"):
-                        from shapely.geometry import Polygon as _SP3
-                        from shapely.wkt import loads as _wl3
-                        # Use buffered drawings first; fall back to current map_out_s3
-                        _drawings_to_save = st.session_state.get("_s3_drawings") or \
-                                            (map_out_s3.get("all_drawings") if map_out_s3 else None)
-                        if not _drawings_to_save:
-                            st.error("No polygon data found. Edit a polygon, click ✓ Save on the toolbar, then try again.")
+                    if st.button("💾 Save Pasted Edits", type="primary", key="s3_save_paste",
+                                 disabled=not bool(_geoman_paste),
+                                 help="Paste the CSV from the map above first"):
+                        if not _geoman_paste.strip():
+                            st.error("Paste the CSV from the map's 'Copy Edited GeoJSON' button first.")
+                        elif st.session_state.get("_s3_import_done"):
+                            st.info("Already saved. Clear the text area to save again.")
                         else:
-                            _poly3 = st.session_state.get("polygon_records_df").copy()
-                            _wc3 = "Polygon WKT" if "Polygon WKT" in _poly3.columns else "boundary"
-                            _undo3 = st.session_state.setdefault("edit_undo_stack", [])
-                            _undo3.append(_poly3.copy())
-                            if len(_undo3) > 10:
-                                st.session_state["edit_undo_stack"] = _undo3[-10:]
-                            _hub_rows3 = _poly3[_poly3[hub_col] == hub_filter] if hub_filter != "All Hubs" else _poly3
-                            _orig3 = []
-                            for _i3, _r3 in _hub_rows3.iterrows():
-                                try:
-                                    _g3 = _wl3(str(_r3.get(_wc3, "")))
-                                    _orig3.append((_i3, _g3.centroid.x, _g3.centroid.y))
-                                except Exception:
-                                    continue
-                            _matched3, _new3, _saved3 = set(), [], 0
-                            for _drw3 in _drawings_to_save:
-                                if _drw3.get("geometry", {}).get("type") != "Polygon":
-                                    continue
-                                _co3 = _drw3["geometry"].get("coordinates", [[]])[0]
-                                if len(_co3) < 4:
-                                    continue
-                                _np3 = _SP3([(_c[0], _c[1]) for _c in _co3])
-                                _nw3 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co3) + "))"
-                                _cx3, _cy3 = _np3.centroid.x, _np3.centroid.y
-                                _best3, _bd3 = None, float("inf")
-                                for (_oi3, _ox3, _oy3) in _orig3:
-                                    if _oi3 in _matched3:
-                                        continue
-                                    _d3 = ((_ox3-_cx3)**2+(_oy3-_cy3)**2)**0.5
-                                    if _d3 < _bd3 and _d3 < 0.05:
-                                        _bd3 = _d3; _best3 = _oi3
-                                if _best3 is not None:
-                                    _poly3.at[_best3, _wc3] = _nw3
-                                    _matched3.add(_best3); _saved3 += 1
-                                else:
-                                    _new3.append(_drw3)
-                            _del3 = [_i for (_i, _, _) in _orig3 if _i not in _matched3]
-                            if _del3:
-                                _poly3 = _poly3.drop(index=_del3).reset_index(drop=True)
-                            st.session_state["polygon_records_df"] = _poly3
-                            st.session_state["_s3_drawings"] = []
+                            st.session_state["_s3_import_done"] = True
                             try:
-                                _poly3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
-                                              index=False, encoding="utf-8-sig")
-                            except Exception:
-                                pass
-                            if _new3:
-                                st.session_state["_pending_new_polys"] = [
-                                    {_wc3: "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _d["geometry"]["coordinates"][0]) + "))"}
-                                    for _d in _new3
-                                ]
-                                st.session_state["_pending_new_polys_hub"] = hub_filter
-                            add_log(f"[{hub_filter}] saved {_saved3} edits, {len(_del3)} deleted", "success")
-                            st.success(f"✅ Saved {_saved3} polygon edits!" + (f" {len(_new3)} new polygon(s) below." if _new3 else ""))
-                            st.rerun()
+                                import io as _io
+                                _imp = pd.read_csv(_io.StringIO(_geoman_paste.strip()))
+                                _poly_s3 = st.session_state.get("polygon_records_df").copy()
+                                _wc_s3 = "Polygon WKT" if "Polygon WKT" in _poly_s3.columns else "boundary"
+                                _cc_s3 = "Cluster_Code" if "Cluster_Code" in _poly_s3.columns else "cluster_code"
+                                st.session_state.setdefault("edit_undo_stack", []).append(_poly_s3.copy())
+                                _updated_s3 = 0
+                                for _, _ir in _imp.iterrows():
+                                    _cc_val = str(_ir.get("cluster_code", "")).strip()
+                                    _wkt_val = str(_ir.get("geometry_wkt", "")).strip()
+                                    if not _cc_val or not _wkt_val:
+                                        continue
+                                    _mask = _poly_s3[_cc_s3].astype(str).str.strip() == _cc_val
+                                    if _mask.any():
+                                        _poly_s3.loc[_mask, _wc_s3] = _wkt_val
+                                        _updated_s3 += 1
+                                    else:
+                                        # New polygon — add it
+                                        _new_row = {_wc_s3: _wkt_val, _cc_s3: _cc_val}
+                                        for _k, _v in _ir.items():
+                                            if _k not in ("cluster_code", "geometry_wkt"):
+                                                _new_row[_k] = _v
+                                        _poly_s3 = pd.concat([_poly_s3, pd.DataFrame([_new_row])], ignore_index=True)
+                                        _updated_s3 += 1
+                                st.session_state["polygon_records_df"] = _poly_s3
+                                try:
+                                    _poly_s3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
+                                                    index=False, encoding="utf-8-sig")
+                                except Exception:
+                                    pass
+                                add_log(f"Geoman: saved {_updated_s3} polygon edits", "success")
+                                st.success(f"✅ Saved {_updated_s3} polygon edits!")
+                                st.rerun()
+                            except Exception as _pe:
+                                st.session_state.pop("_s3_import_done", None)
+                                st.error(f"Parse error: {_pe} — Make sure you copied the CSV from the map button.")
+                # (Geoman import block above handles all saving)
                 with _sc2:
                     if st.session_state.get("edit_undo_stack") and st.button("↶ Undo Last Edit", key="s3_undo_btn"):
                         st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
