@@ -210,7 +210,8 @@ def clean_pincode(df, col="Pincode"):
 
 def get_hub_color_map(hub_names):
     """Return {hub_name: color_hex} mapping."""
-    unique = sorted(set(hub_names))
+    import pandas as pd
+    unique = sorted(set(str(h) for h in hub_names if h is not None and not (isinstance(h, float) and pd.isna(h))))
     return {h: HUB_COLORS[i % len(HUB_COLORS)] for i, h in enumerate(unique)}
 
 

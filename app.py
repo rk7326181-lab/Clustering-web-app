@@ -1693,11 +1693,22 @@ elif nav.startswith("3"):
                                         _poly_s3.loc[_mask, _wc_s3] = _wkt_val
                                         _updated_s3 += 1
                                     else:
-                                        # New polygon — add it
+                                        # New polygon — map CSV lowercase cols to DataFrame title-case cols
+                                        _col_map = {
+                                            "hub_name": "Hub Name",
+                                            "pincode": "Pincode",
+                                            "description": "Description",
+                                            "cluster_category": "Cluster_Category",
+                                        }
                                         _new_row = {_wc_s3: _wkt_val, _cc_s3: _cc_val}
                                         for _k, _v in _ir.items():
-                                            if _k not in ("cluster_code", "geometry_wkt"):
-                                                _new_row[_k] = _v
+                                            if _k in ("cluster_code", "geometry_wkt"):
+                                                continue
+                                            _dest = _col_map.get(_k, _k)
+                                            _new_row[_dest] = _v
+                                        # Inherit hub from filter if not set
+                                        if not _new_row.get("Hub Name") and hub_filter not in ("All Hubs", "All"):
+                                            _new_row["Hub Name"] = hub_filter
                                         _poly_s3 = pd.concat([_poly_s3, pd.DataFrame([_new_row])], ignore_index=True)
                                         _updated_s3 += 1
                                 st.session_state["polygon_records_df"] = _poly_s3
@@ -2098,10 +2109,19 @@ elif nav.startswith("4"):
                                         _poly4.loc[_mask4, _wc4i] = _wv
                                         _upd4 += 1
                                     else:
+                                        _col_map4 = {
+                                            "hub_name": "Hub Name",
+                                            "pincode": "Pincode",
+                                            "description": "Description",
+                                            "cluster_category": "Cluster_Category",
+                                        }
                                         _nr4 = {_wc4i: _wv, _cc4i: _ccv}
                                         for _k4, _v4 in _ir4.items():
-                                            if _k4 not in ("cluster_code","geometry_wkt"):
-                                                _nr4[_k4] = _v4
+                                            if _k4 in ("cluster_code", "geometry_wkt"):
+                                                continue
+                                            _nr4[_col_map4.get(_k4, _k4)] = _v4
+                                        if not _nr4.get("Hub Name") and sel_hub not in ("All Hubs", "All"):
+                                            _nr4["Hub Name"] = sel_hub
                                         _poly4 = pd.concat([_poly4, pd.DataFrame([_nr4])], ignore_index=True)
                                         _upd4 += 1
                                 st.session_state["polygon_records_df"] = _poly4

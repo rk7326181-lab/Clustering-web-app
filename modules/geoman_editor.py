@@ -198,12 +198,26 @@ def build_geoman_editor_html(
       <label>Cluster Category</label>
       <select id="pf-cat">
         <option value="">-- Select --</option>
-        <option value="C7">C7</option>
-        <option value="C11">C11</option>
-        <option value="C15">C15</option>
-        <option value="C20">C20</option>
-        <option value="C25">C25</option>
-        <option value="Other">Other</option>
+        <option value="C1">C1 (1 km)</option>
+        <option value="C2">C2 (2 km)</option>
+        <option value="C3">C3 (3 km)</option>
+        <option value="C4">C4 (4 km)</option>
+        <option value="C5">C5 (5 km)</option>
+        <option value="C6">C6 (6 km)</option>
+        <option value="C7">C7 (7 km)</option>
+        <option value="C8">C8 (8 km)</option>
+        <option value="C9">C9 (9 km)</option>
+        <option value="C10">C10 (10 km)</option>
+        <option value="C11">C11 (11 km)</option>
+        <option value="C12">C12 (12 km)</option>
+        <option value="C13">C13 (13 km)</option>
+        <option value="C14">C14 (14 km)</option>
+        <option value="C15">C15 (15 km)</option>
+        <option value="C16">C16 (16 km)</option>
+        <option value="C17">C17 (17 km)</option>
+        <option value="C18">C18 (18 km)</option>
+        <option value="C19">C19 (19 km)</option>
+        <option value="C20">C20 (20 km)</option>
       </select>
     </div>
     <div id="pf-err"></div>
