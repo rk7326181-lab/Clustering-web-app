@@ -1699,7 +1699,7 @@ elif nav.startswith("3"):
                         except Exception:
                             continue
 
-                    _matched3, _new3, _cnt3 = set(), [], 0
+                    _matched3, _new3, _cnt3, _actually_changed3 = set(), [], 0, False
                     for _drw3 in _drawings3:
                         if _drw3.get("geometry", {}).get("type") != "Polygon":
                             continue
@@ -1717,7 +1717,11 @@ elif nav.startswith("3"):
                             if _d3 < _bd3 and _d3 < 0.05:
                                 _bd3 = _d3; _best3 = _oi3
                         if _best3 is not None:
-                            _poly3.at[_best3, _wc3] = _nw3
+                            # Only flag as changed if WKT actually differs
+                            _old_wkt3 = str(_poly3.at[_best3, _wc3])
+                            if _nw3 != _old_wkt3:
+                                _poly3.at[_best3, _wc3] = _nw3
+                                _actually_changed3 = True
                             _matched3.add(_best3); _cnt3 += 1
                         else:
                             _new3.append(_drw3)
@@ -1725,9 +1729,10 @@ elif nav.startswith("3"):
                     _del3 = [_i for (_i, _, _) in _orig3 if _i not in _matched3]
                     if _del3:
                         _poly3 = _poly3.drop(index=_del3).reset_index(drop=True)
+                        _actually_changed3 = True
 
-                    # Save reshaped / deleted polygons
-                    if _cnt3 or _del3:
+                    # Save ONLY if shapes actually changed (prevents infinite rerun loop)
+                    if _actually_changed3:
                         st.session_state["polygon_records_df"] = _poly3
                         try:
                             _poly3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
@@ -1735,6 +1740,11 @@ elif nav.startswith("3"):
                         except Exception:
                             pass
                         add_log(f"[{hub_filter}] auto-saved: {_cnt3} reshaped, {len(_del3)} deleted", "success")
+                    elif _cnt3 or _del3:
+                        # Matched but no actual changes — pop the undo snapshot we added
+                        _undo3 = st.session_state.get("edit_undo_stack", [])
+                        if _undo3:
+                            st.session_state["edit_undo_stack"] = _undo3[:-1]
 
                     # Queue new drawn polygons for metadata form
                     if _new3:
@@ -1744,8 +1754,8 @@ elif nav.startswith("3"):
                         ]
                         st.session_state["_pending_new_polys_hub"] = hub_filter
 
-                    if _cnt3 or _del3:
-                        st.rerun()  # Rebuild map with updated polygon shapes
+                    if _actually_changed3:
+                        st.rerun()  # Rebuild map only if shapes actually changed
 
                 # Undo button
                 if st.session_state.get("edit_undo_stack"):
@@ -1800,7 +1810,11 @@ elif nav.startswith("3"):
                     key="s3_import_edited",
                     help="Download from the map above, then upload here",
                 )
-                if _s3_import:
+                # Guard flag: only process once per upload to prevent infinite rerun loop
+                if not _s3_import:
+                    st.session_state.pop("_s3_import_done", None)
+                if _s3_import and not st.session_state.get("_s3_import_done"):
+                    st.session_state["_s3_import_done"] = True
                     try:
                         _imp = pd.read_csv(_s3_import)
                         _poly_s3 = st.session_state.get("polygon_records_df").copy()
@@ -1824,9 +1838,10 @@ elif nav.startswith("3"):
                         except Exception:
                             pass
                         add_log(f"Imported {_updated_s3} polygon edits from CSV", "success")
-                        st.success(f"✅ Saved {_updated_s3} polygon edits! Map refreshing...")
+                        st.success(f"✅ Saved {_updated_s3} polygon edits!")
                         st.rerun()
                     except Exception as _ie:
+                        st.session_state.pop("_s3_import_done", None)
                         st.error(f"Import error: {_ie}")
 
             else:
@@ -2224,7 +2239,7 @@ elif nav.startswith("4"):
                         _orig4.append((_i4, _g4.centroid.x, _g4.centroid.y))
                     except Exception:
                         continue
-                _matched4, _cnt4 = set(), 0
+                _matched4, _cnt4, _changed4 = set(), 0, False
                 for _drw4 in _draw4:
                     if _drw4.get("geometry", {}).get("type") != "Polygon":
                         continue
@@ -2242,11 +2257,14 @@ elif nav.startswith("4"):
                         if _d4 < _bd4 and _d4 < 0.05:
                             _bd4 = _d4; _best4 = _oi4
                     if _best4 is not None:
-                        _pd4.at[_best4, _wc4] = _nw4; _matched4.add(_best4); _cnt4 += 1
+                        if _nw4 != str(_pd4.at[_best4, _wc4]):
+                            _pd4.at[_best4, _wc4] = _nw4; _changed4 = True
+                        _matched4.add(_best4); _cnt4 += 1
                 _del4 = [_i for (_i, _, _) in _orig4 if _i not in _matched4]
                 if _del4:
-                    _pd4 = _pd4.drop(index=_del4).reset_index(drop=True)
-                if _cnt4 or _del4:
+                    _pd4 = _pd4.drop(index=_del4).reset_index(drop=True); _changed4 = True
+                # Only save+rerun if shapes actually changed (prevents infinite loop)
+                if _changed4:
                     st.session_state["polygon_records_df"] = _pd4
                     try:
                         _pd4.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
