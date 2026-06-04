@@ -78,10 +78,11 @@ def build_geoman_editor_html(
             adf[lon_col] = pd.to_numeric(adf[lon_col], errors="coerce")
             adf = adf.dropna(subset=[lat_col, lon_col])
             adf = adf[(adf[lat_col] != 0) & (adf[lon_col] != 0)]
-            # Sample up to 5000 points for performance
-            if len(adf) > 5000:
-                adf = adf.sample(5000, random_state=42)
-            awb_points = [[float(r[lat_col]), float(r[lon_col])] for _, r in adf.iterrows()]
+            # Filter AWB dots to selected hub so only relevant shipments are shown
+            hub_col_awb = next((c for c in ["hub name", "hub_name", "hub"] if c in adf.columns), None)
+            if hub_col_awb and hub_filter and hub_filter not in ("All Hubs", "All"):
+                adf = adf[adf[hub_col_awb] == hub_filter]
+            awb_points = adf[[lat_col, lon_col]].values.tolist()
     awb_json = json.dumps(awb_points)
     has_awb = len(awb_points) > 0
 
