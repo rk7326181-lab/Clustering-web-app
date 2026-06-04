@@ -2018,13 +2018,14 @@ elif nav.startswith("4"):
         else:
             hub_type = "All Types"
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
+        if not edit_mode_s4:
+            st.session_state.pop("_s4_import_done", None)
+            st.session_state.pop("s4_geoman_paste", None)
         if edit_mode_s4:
             st.info(
-                "**Edit Mode ON** — existing polygons are now editable:  \n"
-                "• Click the **✏ Edit icon** (left toolbar) → drag any vertex to reshape  \n"
-                "• Click **✓ Save** on the toolbar → changes save automatically and map refreshes  \n"
-                "• Draw a new polygon with the polygon tool  \n"
-                "• Click any polygon on the map to edit its surge rate, cluster code, or delete it"
+                "**Polygon Editor (Leaflet.draw) — same as Step 3:**  \n"
+                "✏️ Edit Vertices | 🖐 Move Polygon | ✚ Draw New | 🗑 Delete  \n"
+                "After editing → **📋 Copy Edited Polygons** → paste below → **Save**"
             )
         try:
             import folium
@@ -2032,35 +2033,20 @@ elif nav.startswith("4"):
             import streamlit.components.v1 as components
             from modules.visualizer import create_polygon_map, create_polygon_map_cached, create_editable_polygon_map, _df_hash
             if edit_mode_s4:
-                # Edit mode: use components.html() — st_folium fails on large
-                # Folium HTML with our MacroElement (appendChild error).
-                # components.html() renders the HTML directly without st_folium's
-                # JavaScript wrapper, so the download button appears correctly.
-                m, edit_fg = create_editable_polygon_map(poly, cdf, hub_filter=sel_hub, satellite=False)
-                if m is not None and edit_fg is not None:
-                    from folium.plugins import Draw
-                    Draw(
-                        export=False,
-                        position="topleft",
-                        feature_group=edit_fg,
-                        show_geometry_on_click=False,
-                        draw_options={
-                            "polyline": False, "circle": False, "rectangle": False,
-                            "marker": False, "circlemarker": False,
-                            "polygon": {"shapeOptions": {"color": "#004E98", "fillOpacity": 0.3}},
-                        },
-                        edit_options={"poly": {"allowIntersection": False}},
-                    ).add_to(m)
-                    _fg_js4 = edit_fg.get_name()
-                    m.get_root().script.add_child(folium.Element(f"window.drawnItems = {_fg_js4};"))
-                    map_out_s4 = st_folium(
-                        m, width=None, height=700,
-                        returned_objects=["all_drawings", "last_active_drawing"],
-                        key=f"s4_edit_map_{sel_hub}",
-                    )
-                else:
-                    map_out_s4 = None
-                    st.warning("Could not render editable map — no polygon data for this hub.")
+                # Edit mode: Geoman/Leaflet.draw editor (same as Step 3)
+                # Uses the verified working Leaflet.draw + cdnjs CDN approach.
+                from modules.geoman_editor import build_geoman_editor_html as _s4_build_editor
+                st.info(
+                    "**How to edit polygons:**  \n"
+                    "1️⃣ Click **✏️ Edit Vertices** button → drag orange handles to reshape  \n"
+                    "2️⃣ Use **✚ Draw New Polygon** to add a new cluster boundary  \n"
+                    "3️⃣ Click **📋 Copy Edited Polygons (CSV)** → paste below → **Save**  \n"
+                    "💡 Also: use the **Leaflet toolbar** (top-left of map) for the same tools"
+                )
+                _s4_awb_df = st.session_state.get("awb_raw_df")
+                _s4_geoman_html = _s4_build_editor(poly, hub_filter=sel_hub, height=660, awb_df=_s4_awb_df)
+                components.html(_s4_geoman_html, height=660, scrolling=False)
+                map_out_s4 = None  # components.html has no return value
             else:
                 # Non-edit mode: use cached HTML for speed
                 html = create_polygon_map_cached(
@@ -2071,76 +2057,84 @@ elif nav.startswith("4"):
                 if html:
                     components.html(html, height=720, scrolling=False)
                 map_out_s4 = None
-            if edit_mode_s4 and map_out_s4 and map_out_s4.get("last_clicked"):
-                from shapely.geometry import Point
-                from shapely.wkt import loads as wkt_loads_s4
-                click_pt = Point(map_out_s4["last_clicked"]["lng"], map_out_s4["last_clicked"]["lat"])
-                poly_df = st.session_state.get("polygon_records_df")
-                if poly_df is not None:
-                    wkt_col_name = "Polygon WKT" if "Polygon WKT" in poly_df.columns else "boundary"
-                    for idx, row in poly_df.iterrows():
-                        try:
-                            poly_geom = wkt_loads_s4(str(row.get(wkt_col_name, "")))
-                            if click_pt.within(poly_geom):
-                                st.markdown(f'''<div class="sfx-card" style="border-left:4px solid #0B8A7A">
-                                    <b>Editing: {row.get("Cluster_Code", row.get("cluster_code", ""))}</b><br>
-                                    Hub: {row.get("Hub Name", row.get("hub_name", ""))} |
-                                    Rate: ₹{row.get("Description", row.get("surge_amount", ""))} |
-                                    Pincode: {row.get("Pincode", row.get("pincode", ""))} |
-                                    AWBs: {row.get("awb_count", "N/A")} |
-                                    Burn: ₹{row.get("Burning", "N/A")} | Saving: ₹{row.get("Saving", "N/A")}
-                                </div>''', unsafe_allow_html=True)
-                                with st.form(key=f"s4_map_edit_{idx}"):
-                                    new_rate = st.number_input("Surge Rate (₹)", value=float(row.get("Description", row.get("surge_amount", 0)) or 0), step=0.5)
-                                    new_code = st.text_input("Cluster Code", value=str(row.get("Cluster_Code", row.get("cluster_code", ""))))
-                                    col_sv, col_dl, col_rn = st.columns(3)
-                                    with col_sv:
-                                        if st.form_submit_button("Save", type="primary"):
-                                            st.session_state["edit_undo_stack"].append(poly_df.copy())
-                                            if "Description" in poly_df.columns:
-                                                poly_df.at[idx, "Description"] = str(int(new_rate)) if new_rate == int(new_rate) else str(new_rate)
-                                            if "surge_amount" in poly_df.columns:
-                                                poly_df.at[idx, "surge_amount"] = new_rate
-                                            st.session_state["polygon_records_df"] = poly_df
-                                            add_log(f"Edited polygon rate to ₹{new_rate}", "success")
-                                            st.rerun()
-                                    with col_dl:
-                                        if st.form_submit_button("Delete"):
-                                            st.session_state["edit_undo_stack"].append(poly_df.copy())
-                                            st.session_state["polygon_records_df"] = poly_df.drop(index=idx).reset_index(drop=True)
-                                            add_log(f"Deleted polygon {row.get('Cluster_Code', '')}", "warning")
-                                            st.rerun()
-                                    with col_rn:
-                                        if st.form_submit_button("Rename"):
-                                            st.session_state["edit_undo_stack"].append(poly_df.copy())
-                                            if "Cluster_Code" in poly_df.columns:
-                                                poly_df.at[idx, "Cluster_Code"] = new_code
-                                            st.session_state["polygon_records_df"] = poly_df
-                                            add_log(f"Renamed polygon to {new_code}", "success")
-                                            st.rerun()
-                                break
-                        except Exception:
-                            continue
-            elif map_out_s4 and map_out_s4.get("last_clicked"):
-                    click_lat = map_out_s4["last_clicked"]["lat"]
-                    click_lon = map_out_s4["last_clicked"]["lng"]
-                    st.markdown(f'<div class="sfx-card"><b>Clicked:</b> {click_lat:.6f}, {click_lon:.6f}</div>', unsafe_allow_html=True)
-                    pdf_inspect = st.session_state.get("polygon_records_df")
-                    if pdf_inspect is not None:
-                        from shapely.geometry import Point as Pt4
-                        from shapely.wkt import loads as wl4
-                        cp = Pt4(map_out_s4["last_clicked"]["lng"], map_out_s4["last_clicked"]["lat"])
-                        wc4 = "Polygon WKT" if "Polygon WKT" in pdf_inspect.columns else "boundary"
-                        for _, row in pdf_inspect.iterrows():
+            # ── Import Edited Polygons (same as Step 3) ───────────────────────
+            if edit_mode_s4:
+                st.markdown('<div class="sfx-header">💾 Import Edited Polygons</div>', unsafe_allow_html=True)
+                st.info(
+                    "**Steps:** In the map above → edit vertices → "
+                    "click **📋 Copy Edited Polygons (CSV)** → paste below → **Save**."
+                )
+                _s4_paste = st.text_area(
+                    "Paste edited polygon CSV here",
+                    key="s4_geoman_paste",
+                    placeholder='Paste CSV from "Copy Edited Polygons" button above...',
+                    height=100,
+                )
+                if not _s4_paste:
+                    st.session_state.pop("_s4_import_done", None)
+                _s4c1, _s4c2 = st.columns(2)
+                with _s4c1:
+                    if st.button("💾 Save Pasted Edits", type="primary", key="s4_save_paste",
+                                 disabled=not bool(_s4_paste)):
+                        if st.session_state.get("_s4_import_done"):
+                            st.info("Already saved. Clear text to save again.")
+                        else:
+                            st.session_state["_s4_import_done"] = True
                             try:
-                                if cp.within(wl4(str(row.get(wc4, "")))):
-                                    st.markdown(f'''<div class="sfx-card">
-                                        <b>{row.get("Cluster_Code", row.get("cluster_code", "—"))}</b> — {row.get("Hub Name", row.get("hub_name", "—"))}<br>
-                                        Rate: ₹{row.get("Description", row.get("surge_amount", "—"))} | Category: {row.get("Cluster_Category", "—")}<br>
-                                        Pincode: {row.get("Pincode", row.get("pincode", "—"))} | AWBs: {row.get("awb_count", "N/A")}
-                                    </div>''', unsafe_allow_html=True)
-                                    break
-                            except Exception:
+                                import io as _io4
+                                _imp4 = pd.read_csv(_io4.StringIO(_s4_paste.strip()))
+                                _poly4 = st.session_state.get("polygon_records_df").copy()
+                                _wc4i = "Polygon WKT" if "Polygon WKT" in _poly4.columns else "boundary"
+                                _cc4i = "Cluster_Code" if "Cluster_Code" in _poly4.columns else "cluster_code"
+                                st.session_state.setdefault("edit_undo_stack", []).append(_poly4.copy())
+                                _upd4 = 0
+                                for _, _ir4 in _imp4.iterrows():
+                                    _ccv = str(_ir4.get("cluster_code", "")).strip()
+                                    _wv  = str(_ir4.get("geometry_wkt", "")).strip()
+                                    if not _ccv or not _wv:
+                                        continue
+                                    _mask4 = _poly4[_cc4i].astype(str).str.strip() == _ccv
+                                    if _mask4.any():
+                                        _poly4.loc[_mask4, _wc4i] = _wv
+                                        _upd4 += 1
+                                    else:
+                                        _nr4 = {_wc4i: _wv, _cc4i: _ccv}
+                                        for _k4, _v4 in _ir4.items():
+                                            if _k4 not in ("cluster_code","geometry_wkt"):
+                                                _nr4[_k4] = _v4
+                                        _poly4 = pd.concat([_poly4, pd.DataFrame([_nr4])], ignore_index=True)
+                                        _upd4 += 1
+                                st.session_state["polygon_records_df"] = _poly4
+                                try:
+                                    _poly4.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
+                                                  index=False, encoding="utf-8-sig")
+                                except Exception:
+                                    pass
+                                add_log(f"Step4: saved {_upd4} polygon edits", "success")
+                                st.success(f"✅ Saved {_upd4} polygon edits!")
+                                st.rerun()
+                            except Exception as _e4:
+                                st.session_state.pop("_s4_import_done", None)
+                                st.error(f"Parse error: {_e4}")
+                with _s4c2:
+                    if st.session_state.get("edit_undo_stack") and st.button("↶ Undo Last Edit", key="s4_undo_geoman"):
+                        st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
+                        add_log("Undid last polygon edit (Step 4)", "warning")
+                        st.rerun()
+
+            if False:  # old click handlers — no longer needed with Geoman editor
+                if map_out_s4 and map_out_s4.get("last_clicked"):
+                    pass
+                elif map_out_s4 and map_out_s4.get("last_clicked"):
+                    pass
+                if False:  # keep indentation valid
+                    if True:
+                        pass
+                    if True:
+                        pass
+                    try:
+                        pass
+                    except Exception:
                                 continue
 
             # ── AUTO-SAVE on Leaflet-Draw ✓ Save (Step 4) ────────────────────

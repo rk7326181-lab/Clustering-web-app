@@ -19,8 +19,14 @@ def build_geoman_editor_html(
     polygon_df: pd.DataFrame,
     hub_filter: str = "All Hubs",
     height: int = 650,
+    awb_df: pd.DataFrame = None,
 ) -> str:
-    """Build a standalone Leaflet + Leaflet.draw polygon editor HTML page."""
+    """Build a standalone Leaflet + Leaflet.draw polygon editor HTML page.
+
+    awb_df: optional AWB/shipment DataFrame with lat/lon columns.
+            Dots shown as a toggleable layer so the user can see shipment
+            locations while reshaping cluster boundaries.
+    """
     df = polygon_df.copy()
     df.columns = df.columns.str.strip()
 
@@ -59,6 +65,25 @@ def build_geoman_editor_html(
             })
 
     fc_json = json.dumps({"type": "FeatureCollection", "features": features})
+
+    # ── Build AWB points JSON ─────────────────────────────────────────────
+    awb_points = []
+    if awb_df is not None and len(awb_df) > 0:
+        adf = awb_df.copy()
+        adf.columns = adf.columns.str.strip().str.lower()
+        lat_col = next((c for c in ["lat", "latitude"] if c in adf.columns), None)
+        lon_col = next((c for c in ["long", "lon", "lng", "longitude"] if c in adf.columns), None)
+        if lat_col and lon_col:
+            adf[lat_col] = pd.to_numeric(adf[lat_col], errors="coerce")
+            adf[lon_col] = pd.to_numeric(adf[lon_col], errors="coerce")
+            adf = adf.dropna(subset=[lat_col, lon_col])
+            adf = adf[(adf[lat_col] != 0) & (adf[lon_col] != 0)]
+            # Sample up to 5000 points for performance
+            if len(adf) > 5000:
+                adf = adf.sample(5000, random_state=42)
+            awb_points = [[float(r[lat_col]), float(r[lon_col])] for _, r in adf.iterrows()]
+    awb_json = json.dumps(awb_points)
+    has_awb = len(awb_points) > 0
 
     center_lat, center_lon = 20.59, 78.96
     if features:
@@ -114,6 +139,7 @@ def build_geoman_editor_html(
   <span id="status">Use the ✏️ Edit, ✚ Draw, 🗑 Delete buttons below — or use Leaflet toolbar (top-left of map)</span>
   <span id="cnt">0 polygons</span>
   <div style="flex:1"></div>
+  {'<button class="tbtn" id="awb-btn" style="background:#7C3AED;margin-right:4px" title="Toggle AWB shipment dot visibility">📦 AWB Dots: ON</button>' if has_awb else ''}
   <button class="tbtn" id="copy-btn" title="Copy all polygons as CSV (Ctrl+S)">
     📋 Copy Edited Polygons (CSV)
   </button>
@@ -348,6 +374,44 @@ function copyCSV() {{
 
 document.getElementById('copy-btn').addEventListener('click', copyCSV);
 document.addEventListener('keydown', function(e){{if((e.ctrlKey||e.metaKey)&&e.key==='s'){{e.preventDefault();copyCSV();}}}});
+
+// ── AWB dots ───────────────────────────────────────────────────────────────
+var AWB_POINTS = {awb_json};
+var awbLayer = null;
+var awbVisible = true;
+
+if (AWB_POINTS && AWB_POINTS.length > 0) {{
+  awbLayer = L.layerGroup();
+  AWB_POINTS.forEach(function(pt) {{
+    L.circleMarker([pt[0], pt[1]], {{
+      radius: 3,
+      color: '#F59E0B',
+      fillColor: '#F59E0B',
+      fillOpacity: 0.7,
+      weight: 0,
+      interactive: false
+    }}).addTo(awbLayer);
+  }});
+  awbLayer.addTo(map);
+  setStatus('Polygons + ' + AWB_POINTS.length + ' AWB dots loaded. Edit polygons to match shipment distribution.');
+}}
+
+function toggleAWB() {{
+  var btn = document.getElementById('awb-btn');
+  if (!awbLayer) return;
+  if (awbVisible) {{
+    map.removeLayer(awbLayer);
+    awbVisible = false;
+    if (btn) {{ btn.textContent = '📦 AWB Dots: OFF'; btn.style.background = '#475569'; }}
+  }} else {{
+    map.addLayer(awbLayer);
+    awbVisible = true;
+    if (btn) {{ btn.textContent = '📦 AWB Dots: ON'; btn.style.background = '#7C3AED'; }}
+  }}
+}}
+
+var awbBtn = document.getElementById('awb-btn');
+if (awbBtn) awbBtn.addEventListener('click', toggleAWB);
 
 </script>
 </body>
