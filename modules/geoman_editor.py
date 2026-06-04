@@ -1,10 +1,13 @@
 """
-Geoman polygon editor — builds a standalone Leaflet-Geoman HTML page.
+Polygon editor using Leaflet + Leaflet.draw — standalone HTML page.
 
-Leaflet-Geoman fires pm:update / pm:create / pm:remove events AFTER each
-edit is committed (no race condition vs streamlit-folium's all_drawings).
-Data is captured in the HTML itself and copied to clipboard / shown in a
-text area so the user can paste it into the Streamlit import field.
+Uses the SAME CDN URLs that Folium already uses for Leaflet.draw
+(cdnjs.cloudflare.com) so they are guaranteed to be accessible on
+Streamlit Cloud.
+
+The standalone HTML context avoids the streamlit-folium race condition:
+there are no Streamlit re-runs inside this HTML, so window.drawnItems
+is never reset. Edits are captured reliably and exported as CSV.
 """
 
 import json
@@ -17,15 +20,15 @@ def build_geoman_editor_html(
     hub_filter: str = "All Hubs",
     height: int = 650,
 ) -> str:
-    """Build a standalone Leaflet + Leaflet-Geoman HTML page."""
+    """Build a standalone Leaflet + Leaflet.draw polygon editor HTML page."""
     df = polygon_df.copy()
     df.columns = df.columns.str.strip()
 
-    hub_col  = "Hub Name"       if "Hub Name"       in df.columns else "hub_name"
-    wkt_col  = "Polygon WKT"    if "Polygon WKT"    in df.columns else "boundary"
-    cc_col   = "Cluster_Code"   if "Cluster_Code"   in df.columns else "cluster_code"
-    pin_col  = "Pincode"        if "Pincode"        in df.columns else "pincode"
-    desc_col = "Description"    if "Description"    in df.columns else "surge_amount"
+    hub_col  = "Hub Name"         if "Hub Name"         in df.columns else "hub_name"
+    wkt_col  = "Polygon WKT"      if "Polygon WKT"      in df.columns else "boundary"
+    cc_col   = "Cluster_Code"     if "Cluster_Code"     in df.columns else "cluster_code"
+    pin_col  = "Pincode"          if "Pincode"          in df.columns else "pincode"
+    desc_col = "Description"      if "Description"      in df.columns else "surge_amount"
     cat_col  = "Cluster_Category" if "Cluster_Category" in df.columns else "cluster_category"
 
     if hub_filter and hub_filter not in ("All Hubs", "All") and hub_col in df.columns:
@@ -62,339 +65,289 @@ def build_geoman_editor_html(
         lats, lons = [], []
         for f in features[:50]:
             for coord in f["geometry"]["coordinates"][0]:
-                lons.append(coord[0]); lats.append(coord[1])
+                lons.append(coord[0])
+                lats.append(coord[1])
         if lats:
             center_lat = sum(lats) / len(lats)
             center_lon = sum(lons) / len(lons)
 
-    map_h = height - 120
+    map_h = height - 115
 
     html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <title>Polygon Editor</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman@latest/dist/leaflet-geoman.css"/>
+<!-- Same CDN URLs Folium uses — proven accessible on Streamlit Cloud -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
 <style>
-  html,body {{ margin:0;padding:0;height:100%;font-family:Arial,sans-serif;background:#0f172a; }}
-  #map {{ height:{map_h}px;width:100%; }}
+  html,body{{margin:0;padding:0;height:100%;font-family:Arial,sans-serif;background:#0f172a;overflow:hidden;}}
+  #map{{height:{map_h}px;width:100%;}}
 
-  /* ── Force Geoman toolbar icons to be visible ── */
-  .leaflet-pm-toolbar {{
-    display:flex !important;
-    flex-direction:column !important;
-  }}
-  .leaflet-pm-toolbar .leaflet-pm-actions-container {{ display:none; }}
-  .button-container.active .leaflet-pm-actions-container {{ display:block; }}
-  .leaflet-pm-toolbar a {{
-    width:30px !important; height:30px !important;
-    display:flex !important; align-items:center; justify-content:center;
-    background:#fff !important; border:none !important;
-    cursor:pointer; border-radius:2px;
-    box-shadow:0 1px 5px rgba(0,0,0,0.65) !important;
-    margin-bottom:1px;
-  }}
-  .leaflet-pm-toolbar a:hover {{ background:#f0f0f0 !important; }}
-  .leaflet-pm-toolbar a.active {{ background:#0B8A7A !important; color:#fff !important; }}
-  /* Make icons visible — SVG masks need fill */
-  .leaflet-pm-icon {{ width:16px;height:16px;display:inline-block; }}
+  /* ── Top bar ── */
+  #topbar{{background:#1e293b;color:#fff;padding:5px 8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-bottom:1px solid #334155;}}
+  .tbtn{{background:#0B8A7A;color:#fff;border:none;border-radius:5px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;}}
+  .tbtn:hover{{background:#097A6C;}}
+  #status{{font-size:11px;color:#94a3b8;flex:1;min-width:160px;}}
+  #cnt{{font-size:11px;background:#0B8A7A20;color:#4AEDC4;border:1px solid #0B8A7A;border-radius:4px;padding:2px 8px;}}
 
-  /* ── Top action bar ── */
-  #topbar {{
-    background:#1e293b; color:#fff; padding:6px 10px;
-    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
-    border-bottom:1px solid #334155;
-  }}
-  .tbtn {{
-    background:#0B8A7A; color:#fff; border:none; border-radius:5px;
-    padding:5px 12px; font-size:12px; font-weight:700; cursor:pointer;
-    display:flex; align-items:center; gap:4px;
-  }}
-  .tbtn:hover {{ background:#097A6C; }}
-  .tbtn-gray {{ background:#475569; }}
-  .tbtn-gray:hover {{ background:#334155; }}
-  .tbtn-red {{ background:#DC2626; }}
-  .tbtn-red:hover {{ background:#B91C1C; }}
-  #status {{ font-size:11px; color:#94a3b8; flex:1; min-width:180px; }}
-  #cnt {{ font-size:11px; background:#0B8A7A30; color:#4AEDC4;
-          border:1px solid #0B8A7A; border-radius:4px; padding:2px 8px; }}
+  /* ── Mode buttons ── */
+  #modebar{{background:#1e293b;padding:4px 8px;border-bottom:1px solid #334155;display:flex;gap:4px;flex-wrap:wrap;}}
+  .mbtn{{background:#0f172a;color:#94a3b8;border:1px solid #475569;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;font-weight:600;}}
+  .mbtn:hover{{background:#334155;color:#fff;}}
+  .mbtn.on{{background:#0B8A7A;color:#fff;border-color:#0B8A7A;}}
 
-  /* ── Output area ── */
-  #outbox {{
-    background:#0f172a; border:1px solid #0B8A7A; border-radius:5px;
-    padding:6px 10px; font-size:10px; color:#4AEDC4; font-family:monospace;
-    margin:4px 8px; max-height:60px; overflow-y:auto;
-    word-break:break-all; white-space:pre-wrap; min-height:26px;
-  }}
+  /* ── Output ── */
+  #outbox{{background:#0f172a;border:1px solid #0B8A7A;border-radius:4px;padding:5px 8px;font-size:10px;color:#4AEDC4;font-family:monospace;margin:3px 6px;max-height:55px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;}}
 
-  /* ── Mode indicator buttons ── */
-  #mode-btns {{ display:flex; gap:4px; }}
-  .mode-btn {{
-    background:#1e293b; color:#94a3b8; border:1px solid #475569;
-    border-radius:4px; padding:4px 10px; font-size:11px; cursor:pointer;
-    font-weight:600;
-  }}
-  .mode-btn.on {{ background:#0B8A7A; color:#fff; border-color:#0B8A7A; }}
-  .mode-btn:hover {{ background:#334155; color:#fff; }}
+  /* ── Leaflet.draw toolbar overrides ── */
+  .leaflet-draw-toolbar a{{background-color:#1e293b!important;border-color:#475569!important;color:#94a3b8!important;}}
+  .leaflet-draw-toolbar a:hover{{background-color:#334155!important;color:#fff!important;}}
+  .leaflet-draw-edit-save{{background-color:#0B8A7A!important;color:#fff!important;}}
+  .leaflet-draw-edit-remove{{background-color:#DC2626!important;color:#fff!important;}}
 </style>
 </head>
 <body>
 
 <div id="topbar">
-  <span id="status">Select an edit mode using the buttons below</span>
+  <span id="status">Use the ✏️ Edit, ✚ Draw, 🗑 Delete buttons below — or use Leaflet toolbar (top-left of map)</span>
   <span id="cnt">0 polygons</span>
   <div style="flex:1"></div>
-  <button class="tbtn" onclick="copyCSV()" title="Copy edited polygons as CSV">
+  <button class="tbtn" id="copy-btn" title="Copy all polygons as CSV (Ctrl+S)">
     📋 Copy Edited Polygons (CSV)
   </button>
 </div>
 
-<div id="mode-btns" style="padding:4px 8px; background:#1e293b; border-bottom:1px solid #334155; display:flex; gap:4px; flex-wrap:wrap;">
-  <button class="mode-btn" id="btn-edit"   onclick="toggleMode('edit')"   title="Drag vertex handles to reshape polygons">✏️ Edit Vertices</button>
-  <button class="mode-btn" id="btn-drag"   onclick="toggleMode('drag')"   title="Move entire polygons">🖐 Drag Polygon</button>
-  <button class="mode-btn" id="btn-draw"   onclick="toggleMode('draw')"   title="Draw a new polygon">✚ Draw New</button>
-  <button class="mode-btn" id="btn-delete" onclick="toggleMode('delete')" title="Click a polygon to delete it">🗑 Delete</button>
-  <button class="mode-btn tbtn-gray" onclick="disableAll()" title="Exit all edit modes">✗ Exit</button>
+<div id="modebar">
+  <button class="mbtn" id="btn-edit"   title="Drag vertices to reshape polygons">✏️ Edit Vertices</button>
+  <button class="mbtn" id="btn-drag"   title="Move whole polygons">🖐 Move Polygon</button>
+  <button class="mbtn" id="btn-draw"   title="Draw a new polygon">✚ Draw New Polygon</button>
+  <button class="mbtn" id="btn-delete" title="Click polygon to delete it">🗑 Delete Polygon</button>
+  <button class="mbtn" id="btn-exit"   title="Exit current mode" style="background:#1e3a5f;color:#94a3b8;">✗ Exit Mode</button>
 </div>
 
 <div id="map"></div>
-<div id="outbox">CSV will appear here after clicking "Copy Edited Polygons"</div>
+<div id="outbox">Click "Copy Edited Polygons" after editing to export your changes as CSV.</div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/@geoman-io/leaflet-geoman@latest/dist/leaflet-geoman.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 <script>
 
 var FC = {fc_json};
 var polyLayers = [];
-var colorPalette = ['#FF6384','#36A2EB','#FFCE56','#4BC0C0','#9966FF','#FF9F40','#00B3E6','#E6B333','#CC3366','#34D399'];
+var drawnItems = new L.FeatureGroup();
+var COLORS = ['#FF6384','#36A2EB','#FFCE56','#4BC0C0','#9966FF','#FF9F40','#00B3E6','#E6B333','#CC3366','#34D399'];
 var hubColors = {{}};
 var hIdx = 0;
-var activeMode = null;
+var activeCtrl = null;
 
-// ── Map ────────────────────────────────────────────────────────────────────
-var map = L.map('map', {{
-  center: [{center_lat:.4f}, {center_lon:.4f}],
-  zoom: 10,
-  zoomControl: true
-}});
+// ── Map setup ──────────────────────────────────────────────────────────────
+var map = L.map('map', {{center:[{center_lat:.5f},{center_lon:.5f}], zoom:10}});
 
-var osmTile = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-  attribution: '© OpenStreetMap', maxZoom: 19
-}}).addTo(map);
-
-var satTile = L.tileLayer(
-  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
-  {{ attribution: 'Esri', maxZoom: 19 }}
-);
-
-L.control.layers({{'Street Map': osmTile, 'Satellite': satTile}}, {{}}, {{position:'topright'}}).addTo(map);
+var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{attribution:'© OSM',maxZoom:19}}).addTo(map);
+var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',{{attribution:'Esri',maxZoom:19}});
+L.control.layers({{'Street Map':osm,'Satellite':sat}},{{}},{{position:'topright'}}).addTo(map);
 L.control.scale({{position:'bottomright'}}).addTo(map);
 
-// ── Load polygons ──────────────────────────────────────────────────────────
+map.addLayer(drawnItems);
+
+// ── Leaflet.draw control (provides the actual editing tools) ───────────────
+var drawControl = new L.Control.Draw({{
+  position: 'topleft',
+  edit: {{
+    featureGroup: drawnItems,
+    edit: {{
+      selectedPathOptions: {{
+        maintainColor: true,
+        moveMarkers: true
+      }}
+    }},
+    remove: true
+  }},
+  draw: {{
+    polygon: {{
+      allowIntersection: false,
+      drawError: {{color:'#e1e100', message:'<strong>Error:</strong> shape edges cannot cross!'}},
+      shapeOptions: {{color:'#0B8A7A', fillOpacity:0.3}}
+    }},
+    polyline: false, rectangle: false, circle: false,
+    marker: false, circlemarker: false
+  }}
+}});
+map.addControl(drawControl);
+
+// ── Load existing polygons ─────────────────────────────────────────────────
 if (FC && FC.features && FC.features.length > 0) {{
   FC.features.forEach(function(feature) {{
     var hub = (feature.properties && feature.properties.hub_name) || '';
-    if (!hubColors[hub]) {{
-      hubColors[hub] = colorPalette[hIdx % colorPalette.length];
-      hIdx++;
-    }}
+    if (!hubColors[hub]) {{ hubColors[hub]=COLORS[hIdx%COLORS.length]; hIdx++; }}
     var color = hubColors[hub];
 
-    var gjLayer = L.geoJSON(feature, {{
-      style: function() {{
-        return {{ color: color, weight: 2.5, fillColor: color, fillOpacity: 0.35, opacity:0.9 }};
-      }},
+    L.geoJSON(feature, {{
+      style: function() {{ return {{color:color,weight:2.5,fillColor:color,fillOpacity:0.35}}; }},
       onEachFeature: function(f, layer) {{
-        var p = f.properties || {{}};
+        layer._props = f.properties || {{}};
         layer.bindPopup(
           '<div style="font-family:Arial;font-size:12px">' +
-          '<b>' + (p.cluster_code||'N/A') + '</b><br>' +
-          'Hub: ' + (p.hub_name||'') + '<br>' +
-          'Pincode: ' + (p.pincode||'') + '<br>' +
-          'Rate: ₹' + (p.description||'') +
-          '</div>'
+          '<b>' + (layer._props.cluster_code||'N/A') + '</b><br>' +
+          'Hub: ' + (layer._props.hub_name||'') + '<br>' +
+          'Pincode: ' + (layer._props.pincode||'') + '<br>' +
+          'Rate: ₹' + (layer._props.description||'') + '</div>'
         );
-        layer.bindTooltip(p.cluster_code||'', {{sticky:true, className:'leaflet-tooltip'}});
-        layer._props = p;
+        layer.bindTooltip(layer._props.cluster_code||'',{{sticky:true}});
+        drawnItems.addLayer(layer);
         polyLayers.push(layer);
       }}
-    }}).addTo(map);
+    }});
   }});
 
-  // Fit map to polygons
-  try {{
-    var group = L.featureGroup(polyLayers);
-    map.fitBounds(group.getBounds().pad(0.05));
-  }} catch(e) {{}}
-}} else {{
-  document.getElementById('status').textContent = 'No polygons loaded. Select a hub first.';
+  try {{ map.fitBounds(drawnItems.getBounds().pad(0.05)); }} catch(e){{}}
 }}
-
 document.getElementById('cnt').textContent = polyLayers.length + ' polygons';
-
-// ── Geoman init ────────────────────────────────────────────────────────────
-map.pm.setGlobalOptions({{
-  allowSelfIntersection: false,
-  snappable: true,
-  snapDistance: 15,
-}});
-
-// ── Mode toggle buttons ────────────────────────────────────────────────────
-function setAllBtnsOff() {{
-  ['btn-edit','btn-drag','btn-draw','btn-delete'].forEach(function(id) {{
-    var el = document.getElementById(id);
-    if(el) el.classList.remove('on');
-  }});
-}}
-
-function disableAll() {{
-  map.pm.disableGlobalEditMode();
-  map.pm.disableGlobalDragMode();
-  map.pm.disableDraw();
-  map.pm.disableGlobalRemovalMode();
-  setAllBtnsOff();
-  activeMode = null;
-  document.getElementById('status').textContent = 'All modes off — click a mode button to start editing';
-}}
-
-function toggleMode(mode) {{
-  // If clicking active mode, turn it off
-  if (activeMode === mode) {{
-    disableAll();
-    return;
-  }}
-  // Disable all first
-  map.pm.disableGlobalEditMode();
-  map.pm.disableGlobalDragMode();
-  map.pm.disableDraw();
-  map.pm.disableGlobalRemovalMode();
-  setAllBtnsOff();
-  activeMode = mode;
-  document.getElementById('btn-' + mode).classList.add('on');
-
-  if (mode === 'edit') {{
-    map.pm.enableGlobalEditMode({{ allowSelfIntersection: false }});
-    document.getElementById('status').textContent = '✏️ Edit mode: drag orange vertex handles to reshape polygons';
-  }} else if (mode === 'drag') {{
-    map.pm.enableGlobalDragMode();
-    document.getElementById('status').textContent = '🖐 Drag mode: click and drag a polygon to move it';
-  }} else if (mode === 'draw') {{
-    map.pm.enableDraw('Polygon');
-    document.getElementById('status').textContent = '✚ Draw mode: click to add vertices, double-click to finish';
-  }} else if (mode === 'delete') {{
-    map.pm.enableGlobalRemovalMode();
-    document.getElementById('status').textContent = '🗑 Delete mode: click a polygon to remove it';
-  }}
-}}
+setStatus('Polygons loaded. Use the buttons below or Leaflet toolbar (top-left) to edit.');
 
 // ── Event listeners ────────────────────────────────────────────────────────
-map.on('pm:edit', function(e) {{
-  document.getElementById('status').textContent = '✅ Polygon reshaped — click "Copy Edited Polygons (CSV)" to export';
+map.on(L.Draw.Event.CREATED, function(e) {{
+  var layer = e.layer;
+  layer._props = {{ cluster_code:'NEW_'+Date.now(), hub_name:'', pincode:'', description:'', cluster_category:'' }};
+  drawnItems.addLayer(layer);
+  polyLayers.push(layer);
+  document.getElementById('cnt').textContent = drawnItems.getLayers().length + ' polygons';
+  setStatus('✅ New polygon drawn. Click "Copy Edited Polygons" to export.');
 }});
 
-map.on('pm:dragend', function(e) {{
-  document.getElementById('status').textContent = '✅ Polygon moved — click "Copy Edited Polygons (CSV)" to export';
+map.on(L.Draw.Event.EDITED, function(e) {{
+  setStatus('✅ ' + e.layers.getLayers().length + ' polygon(s) reshaped. Click "Copy Edited Polygons" to export.');
 }});
 
-map.on('pm:create', function(e) {{
-  e.layer._props = {{
-    cluster_code: 'NEW_' + (Date.now() % 100000),
-    hub_name: '', pincode: '', description: '', cluster_category: ''
-  }};
-  polyLayers.push(e.layer);
-  document.getElementById('cnt').textContent = polyLayers.length + ' polygons';
-  document.getElementById('status').textContent = '🆕 New polygon drawn — export CSV and fill in metadata after pasting';
+map.on(L.Draw.Event.DELETED, function(e) {{
+  document.getElementById('cnt').textContent = drawnItems.getLayers().length + ' polygons';
+  setStatus('✅ Polygon(s) deleted. Click "Copy Edited Polygons" to export.');
 }});
 
-map.on('pm:remove', function(e) {{
-  var idx = polyLayers.indexOf(e.layer);
-  if (idx > -1) polyLayers.splice(idx, 1);
-  document.getElementById('cnt').textContent = polyLayers.length + ' polygons';
-  document.getElementById('status').textContent = '🗑 Polygon deleted';
-}});
+// ── Mode button helpers ────────────────────────────────────────────────────
+function setStatus(msg) {{ document.getElementById('status').textContent = msg; }}
 
-// ── CSV export ─────────────────────────────────────────────────────────────
-function layerToFeature(layer) {{
-  try {{
-    var gj = null;
-    if (layer instanceof L.GeoJSON) {{
-      var sub = [];
-      layer.eachLayer(function(l) {{ if(l.toGeoJSON) sub.push(l); }});
-      if (sub.length > 0) return sub.map(function(l) {{
-        var f = l.toGeoJSON();
-        if(l._props) f.properties = Object.assign({{}}, l._props, f.properties);
-        return f;
-      }});
-      return [];
-    }} else if (layer.toGeoJSON) {{
-      gj = layer.toGeoJSON();
-      if(layer._props) gj.properties = Object.assign({{}}, layer._props, gj.properties);
-      return [gj];
-    }}
-  }} catch(e) {{ return []; }}
-  return [];
+function setBtnOn(id) {{
+  ['btn-edit','btn-drag','btn-draw','btn-delete'].forEach(function(b){{
+    var el=document.getElementById(b); if(el) el.classList.remove('on');
+  }});
+  var el=document.getElementById(id); if(el) el.classList.add('on');
 }}
 
+function exitAllModes() {{
+  setBtnOn(null);
+  if (activeCtrl) {{
+    try {{ activeCtrl.disable(); }} catch(e){{}}
+    activeCtrl = null;
+  }}
+  // Also disable any Leaflet.draw active state
+  try {{ drawControl._toolbars.edit._modes.edit&&drawControl._toolbars.edit._modes.edit.handler.disable(); }} catch(e){{}}
+  try {{ drawControl._toolbars.edit._modes.remove&&drawControl._toolbars.edit._modes.remove.handler.disable(); }} catch(e){{}}
+  try {{ drawControl._toolbars.draw._modes.polygon&&drawControl._toolbars.draw._modes.polygon.handler.disable(); }} catch(e){{}}
+}}
+
+// ── Button event listeners ─────────────────────────────────────────────────
+document.getElementById('btn-edit').addEventListener('click', function() {{
+  exitAllModes();
+  try {{
+    setBtnOn('btn-edit');
+    new L.EditToolbar.Edit(map, {{featureGroup:drawnItems}}).enable();
+    setStatus('✏️ Edit mode: click a polygon, then drag its vertices to reshape. Click Save (checkmark) to confirm.');
+  }} catch(e) {{
+    // Fallback: activate Leaflet.draw edit via toolbar
+    var editBtn = document.querySelector('.leaflet-draw-edit-edit');
+    if (editBtn) editBtn.click();
+    setStatus('✏️ Click the pencil icon in the map toolbar (top-left) to edit vertices.');
+  }}
+}});
+
+document.getElementById('btn-drag').addEventListener('click', function() {{
+  exitAllModes();
+  setBtnOn('btn-drag');
+  setStatus('🗱 Drag mode: Use the move icon in the Leaflet toolbar (top-left of map) to drag polygons.');
+  // Visual hint — trigger the edit toolbar
+  var editBtn = document.querySelector('.leaflet-draw-edit-edit');
+  if (editBtn) editBtn.click();
+}});
+
+document.getElementById('btn-draw').addEventListener('click', function() {{
+  exitAllModes();
+  setBtnOn('btn-draw');
+  try {{
+    new L.Draw.Polygon(map, drawControl.options.draw.polygon).enable();
+    setStatus('✚ Draw mode: Click to add points. Double-click to finish the polygon.');
+  }} catch(e) {{
+    var drawBtn = document.querySelector('.leaflet-draw-draw-polygon');
+    if (drawBtn) drawBtn.click();
+    setStatus('✚ Click the polygon icon in the map toolbar to draw a new polygon.');
+  }}
+}});
+
+document.getElementById('btn-delete').addEventListener('click', function() {{
+  exitAllModes();
+  setBtnOn('btn-delete');
+  try {{
+    new L.EditToolbar.Delete(map, {{featureGroup:drawnItems}}).enable();
+    setStatus('🗑 Delete mode: click any polygon to remove it. Click Save (checkmark) to confirm.');
+  }} catch(e) {{
+    var delBtn = document.querySelector('.leaflet-draw-edit-remove');
+    if (delBtn) delBtn.click();
+    setStatus('🗑 Click the trash icon in the map toolbar to delete polygons.');
+  }}
+}});
+
+document.getElementById('btn-exit').addEventListener('click', function() {{
+  exitAllModes();
+  setStatus('Edit mode off. Your changes are preserved — click "Copy Edited Polygons" to export.');
+}});
+
+// ── CSV Export ─────────────────────────────────────────────────────────────
 function copyCSV() {{
   var rows = ['"cluster_code","hub_name","pincode","description","cluster_category","geometry_wkt"'];
   var count = 0;
 
-  map.eachLayer(function(layer) {{
-    var skip = (layer instanceof L.TileLayer) ||
-               (layer instanceof L.LayerGroup && !(layer instanceof L.GeoJSON)) ||
-               layer._url; // tile layers have _url
-    if (skip) return;
+  drawnItems.eachLayer(function(layer) {{
+    try {{
+      var gj = layer.toGeoJSON();
+      var geom = gj.geometry;
+      if (!geom || !geom.coordinates || !geom.coordinates[0]) return;
 
-    var feats = layerToFeature(layer);
-    feats.forEach(function(f) {{
-      if (!f || !f.geometry) return;
-      var g = f.geometry;
-      // Handle both Polygon and MultiPolygon
-      var rings = g.type === 'Polygon' ? g.coordinates : (g.type === 'MultiPolygon' ? g.coordinates[0] : null);
-      if (!rings || !rings[0]) return;
-      var coords = rings[0];
-      if (coords.length < 4) return;
+      var coords = geom.type === 'Polygon' ? geom.coordinates[0] :
+                   (geom.type === 'MultiPolygon' ? geom.coordinates[0][0] : null);
+      if (!coords || coords.length < 4) return;
 
-      // Close ring if not closed
-      var first = coords[0], last = coords[coords.length-1];
-      if (first[0] !== last[0] || first[1] !== last[1]) coords = coords.concat([first]);
+      // Close ring
+      var f=coords[0],l=coords[coords.length-1];
+      if(f[0]!==l[0]||f[1]!==l[1]) coords=coords.concat([[f[0],f[1]]]);
 
-      var wkt = 'POLYGON((' + coords.map(function(c) {{ return c[0] + ' ' + c[1]; }}).join(', ') + '))';
-      var p = f.properties || {{}};
-      function q(v) {{ return '"' + String(v||'').replace(/"/g,'""') + '"'; }}
-      rows.push([q(p.cluster_code), q(p.hub_name), q(p.pincode), q(p.description), q(p.cluster_category), q(wkt)].join(','));
+      var wkt = 'POLYGON((' + coords.map(function(c){{return c[0]+' '+c[1];}}).join(', ') + '))';
+      var p = layer._props || {{}};
+      function q(v){{return'"'+String(v||'').replace(/"/g,'""')+'"';}}
+      rows.push([q(p.cluster_code),q(p.hub_name),q(p.pincode),q(p.description),q(p.cluster_category),q(wkt)].join(','));
       count++;
-    }});
+    }} catch(e) {{}}
   }});
 
   if (count === 0) {{
-    document.getElementById('status').textContent = '⚠️ No polygon data found — load polygons first';
+    setStatus('⚠️ No polygon data found. Make sure polygons are loaded.');
     return;
   }}
 
   var csv = rows.join('\\n');
   document.getElementById('outbox').textContent = csv;
 
-  if (navigator.clipboard && navigator.clipboard.writeText) {{
-    navigator.clipboard.writeText(csv).then(function() {{
-      document.getElementById('status').textContent = '✅ ' + count + ' polygons copied to clipboard! Paste in the field below the map.';
-      document.getElementById('outbox').style.borderColor = '#4AEDC4';
-    }}).catch(function() {{
-      document.getElementById('status').textContent = '⚠️ Auto-copy failed — manually select and copy the text from the box below.';
-    }});
-  }} else {{
-    document.getElementById('status').textContent = '📋 ' + count + ' polygons in box below — select all and copy (Ctrl+A, Ctrl+C)';
-  }}
+  navigator.clipboard && navigator.clipboard.writeText(csv).then(function() {{
+    setStatus('✅ ' + count + ' polygon(s) copied to clipboard! Paste in the field below the map.');
+    document.getElementById('outbox').style.borderColor='#4AEDC4';
+  }}).catch(function() {{
+    setStatus('📋 ' + count + ' polygon(s) in box below — select all (Ctrl+A) then copy (Ctrl+C).');
+  }});
 }}
 
-// Keyboard shortcut: Ctrl+S = copy CSV
-document.addEventListener('keydown', function(e) {{
-  if ((e.ctrlKey || e.metaKey) && e.key === 's') {{
-    e.preventDefault();
-    copyCSV();
-  }}
-}});
+document.getElementById('copy-btn').addEventListener('click', copyCSV);
+document.addEventListener('keydown', function(e){{if((e.ctrlKey||e.metaKey)&&e.key==='s'){{e.preventDefault();copyCSV();}}}});
 
 </script>
 </body>
