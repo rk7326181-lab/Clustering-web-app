@@ -2123,19 +2123,7 @@ elif nav.startswith("4"):
                         st.rerun()
 
             if False:  # old click handlers — no longer needed with Geoman editor
-                if map_out_s4 and map_out_s4.get("last_clicked"):
-                    pass
-                elif map_out_s4 and map_out_s4.get("last_clicked"):
-                    pass
-                if False:  # keep indentation valid
-                    if True:
-                        pass
-                    if True:
-                        pass
-                    try:
-                        pass
-                    except Exception:
-                                continue
+                pass
 
             # ── AUTO-SAVE on Leaflet-Draw ✓ Save (Step 4) ────────────────────
             if edit_mode_s4 and map_out_s4 and map_out_s4.get("all_drawings"):
