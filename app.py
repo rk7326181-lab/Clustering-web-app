@@ -1619,13 +1619,16 @@ elif nav.startswith("3"):
         if edit_polygons and hub_filter == "All Hubs":
             st.warning("⚠️ Select a single hub from the filter above to enable editing. Editing is disabled for 'All Hubs' view.")
             edit_polygons = False
+        if not edit_polygons:
+            st.session_state.pop("_s3_drawings", None)
+            st.session_state.pop("_s3_import_done", None)
         if edit_polygons:
             st.info(
-                "**Editing enabled for hub:** `" + str(hub_filter) + "`  \n"
-                "• Click the ✏ icon on the left toolbar → click a polygon to drag its vertices  \n"
-                "• Click the ▭ icon to draw a new polygon  \n"
-                "• Click the 🗑 icon to delete a polygon  \n"
-                "• When done, hit **Save** on the toolbar, then click **Apply & Regenerate Image** below."
+                "**How to edit polygons:**  \n"
+                "1️⃣ Click the **✏ Edit icon** on the map toolbar  \n"
+                "2️⃣ Drag any vertex to reshape — or click 🗑 Delete to remove a polygon  \n"
+                "3️⃣ Click **✓ Save** on the toolbar  \n"
+                "4️⃣ Click **💾 Save My Edits** button below the map"
             )
         try:
             import folium
@@ -1672,177 +1675,139 @@ elif nav.startswith("3"):
                     map_out_s3 = None
                     st.warning("Could not render editable map — no polygons to display for this hub.")
 
-                # ── AUTO-SAVE on Leaflet-Draw ✓ Save ──────────────────────────
-                # When draw:edited fires (user clicks ✓ on map toolbar),
-                # apply reshapes IMMEDIATELY so the map rebuilds with saved shapes.
-                # No separate "Apply" button needed — mirrors Maps Studio behaviour.
+                # ── BUFFER all_drawings in session state ──────────────────────
+                # Root cause: streamlit-folium calls updateComponentValue() on
+                # EVERY onRender — so after st.rerun() the map rebuilds with
+                # original data and all_drawings is overwritten with originals.
+                # Fix: store all_drawings immediately, then use an explicit
+                # "Save My Edits" button so the user controls when to save.
                 if map_out_s3 and map_out_s3.get("all_drawings"):
-                    from shapely.geometry import Polygon as _SP3
-                    from shapely.wkt import loads as _wl3
-                    _drawings3 = map_out_s3["all_drawings"]
-                    _poly3 = st.session_state.get("polygon_records_df").copy()
-                    _wc3 = "Polygon WKT" if "Polygon WKT" in _poly3.columns else "boundary"
+                    st.session_state["_s3_drawings"] = map_out_s3["all_drawings"]
 
-                    # Push undo snapshot (cap at 10)
-                    _undo3 = st.session_state.setdefault("edit_undo_stack", [])
-                    _undo3.append(_poly3.copy())
-                    if len(_undo3) > 10:
-                        st.session_state["edit_undo_stack"] = _undo3[-10:]
-
-                    # Compute original centroids for this hub
-                    _hub_rows3 = _poly3[_poly3[hub_col] == hub_filter] if hub_filter != "All Hubs" else _poly3
-                    _orig3 = []
-                    for _i3, _r3 in _hub_rows3.iterrows():
-                        try:
-                            _g3 = _wl3(str(_r3.get(_wc3, "")))
-                            _orig3.append((_i3, _g3.centroid.x, _g3.centroid.y))
-                        except Exception:
-                            continue
-
-                    _matched3, _new3, _cnt3, _actually_changed3 = set(), [], 0, False
-                    for _drw3 in _drawings3:
-                        if _drw3.get("geometry", {}).get("type") != "Polygon":
-                            continue
-                        _co3 = _drw3["geometry"].get("coordinates", [[]])[0]
-                        if len(_co3) < 4:
-                            continue
-                        _np3 = _SP3([(_c[0], _c[1]) for _c in _co3])
-                        _nw3 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co3) + "))"
-                        _cx3, _cy3 = _np3.centroid.x, _np3.centroid.y
-                        _best3, _bd3 = None, float("inf")
-                        for (_oi3, _ox3, _oy3) in _orig3:
-                            if _oi3 in _matched3:
-                                continue
-                            _d3 = ((_ox3 - _cx3)**2 + (_oy3 - _cy3)**2)**0.5
-                            if _d3 < _bd3 and _d3 < 0.05:
-                                _bd3 = _d3; _best3 = _oi3
-                        if _best3 is not None:
-                            # Only flag as changed if WKT actually differs
-                            _old_wkt3 = str(_poly3.at[_best3, _wc3])
-                            if _nw3 != _old_wkt3:
-                                _poly3.at[_best3, _wc3] = _nw3
-                                _actually_changed3 = True
-                            _matched3.add(_best3); _cnt3 += 1
-                        else:
-                            _new3.append(_drw3)
-
-                    _del3 = [_i for (_i, _, _) in _orig3 if _i not in _matched3]
-                    if _del3:
-                        _poly3 = _poly3.drop(index=_del3).reset_index(drop=True)
-                        _actually_changed3 = True
-
-                    # Save ONLY if shapes actually changed (prevents infinite rerun loop)
-                    if _actually_changed3:
-                        st.session_state["polygon_records_df"] = _poly3
-                        try:
-                            _poly3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
-                                          index=False, encoding="utf-8-sig")
-                        except Exception:
-                            pass
-                        add_log(f"[{hub_filter}] auto-saved: {_cnt3} reshaped, {len(_del3)} deleted", "success")
-                    elif _cnt3 or _del3:
-                        # Matched but no actual changes — pop the undo snapshot we added
-                        _undo3 = st.session_state.get("edit_undo_stack", [])
-                        if _undo3:
-                            st.session_state["edit_undo_stack"] = _undo3[:-1]
-
-                    # Queue new drawn polygons for metadata form
-                    if _new3:
-                        st.session_state["_pending_new_polys"] = [
-                            {_wc3: "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _drw["geometry"]["coordinates"][0]) + "))"}
-                            for _drw in _new3
-                        ]
-                        st.session_state["_pending_new_polys_hub"] = hub_filter
-
-                    if _actually_changed3:
-                        st.rerun()  # Rebuild map only if shapes actually changed
-
-                # Undo button
-                if st.session_state.get("edit_undo_stack"):
+                # ── Save My Edits button ───────────────────────────────────────
+                _s3_buffered = st.session_state.get("_s3_drawings", [])
+                if _s3_buffered:
+                    st.markdown('<div class="sfx-ok">✏️ Unsaved edits detected — click Save below.</div>',
+                                unsafe_allow_html=True)
+                    _sc1, _sc2 = st.columns(2)
+                    with _sc1:
+                        if st.button("💾 Save My Edits", type="primary", key="s3_apply_edits"):
+                            from shapely.geometry import Polygon as _SP3
+                            from shapely.wkt import loads as _wl3
+                            _poly3 = st.session_state.get("polygon_records_df").copy()
+                            _wc3 = "Polygon WKT" if "Polygon WKT" in _poly3.columns else "boundary"
+                            _undo3 = st.session_state.setdefault("edit_undo_stack", [])
+                            _undo3.append(_poly3.copy())
+                            if len(_undo3) > 10:
+                                st.session_state["edit_undo_stack"] = _undo3[-10:]
+                            _hub_rows3 = _poly3[_poly3[hub_col] == hub_filter] if hub_filter != "All Hubs" else _poly3
+                            _orig3 = []
+                            for _i3, _r3 in _hub_rows3.iterrows():
+                                try:
+                                    _g3 = _wl3(str(_r3.get(_wc3, "")))
+                                    _orig3.append((_i3, _g3.centroid.x, _g3.centroid.y))
+                                except Exception:
+                                    continue
+                            _matched3, _new3, _saved3 = set(), [], 0
+                            for _drw3 in _s3_buffered:
+                                if _drw3.get("geometry", {}).get("type") != "Polygon":
+                                    continue
+                                _co3 = _drw3["geometry"].get("coordinates", [[]])[0]
+                                if len(_co3) < 4:
+                                    continue
+                                _np3 = _SP3([(_c[0], _c[1]) for _c in _co3])
+                                _nw3 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co3) + "))"
+                                _cx3, _cy3 = _np3.centroid.x, _np3.centroid.y
+                                _best3, _bd3 = None, float("inf")
+                                for (_oi3, _ox3, _oy3) in _orig3:
+                                    if _oi3 in _matched3:
+                                        continue
+                                    _d3 = ((_ox3-_cx3)**2+(_oy3-_cy3)**2)**0.5
+                                    if _d3 < _bd3 and _d3 < 0.05:
+                                        _bd3 = _d3; _best3 = _oi3
+                                if _best3 is not None:
+                                    _poly3.at[_best3, _wc3] = _nw3
+                                    _matched3.add(_best3); _saved3 += 1
+                                else:
+                                    _new3.append(_drw3)
+                            _del3 = [_i for (_i, _, _) in _orig3 if _i not in _matched3]
+                            if _del3:
+                                _poly3 = _poly3.drop(index=_del3).reset_index(drop=True)
+                            st.session_state["polygon_records_df"] = _poly3
+                            st.session_state["_s3_drawings"] = []
+                            try:
+                                _poly3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
+                                              index=False, encoding="utf-8-sig")
+                            except Exception:
+                                pass
+                            if _new3:
+                                st.session_state["_pending_new_polys"] = [
+                                    {_wc3: "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _d["geometry"]["coordinates"][0]) + "))"}
+                                    for _d in _new3
+                                ]
+                                st.session_state["_pending_new_polys_hub"] = hub_filter
+                            add_log(f"[{hub_filter}] saved {_saved3} edits, {len(_del3)} deleted", "success")
+                            st.success(f"✅ Saved {_saved3} polygon edits!" + (f" {len(_new3)} new polygon(s) below." if _new3 else ""))
+                            st.rerun()
+                    with _sc2:
+                        if st.session_state.get("edit_undo_stack") and st.button("↶ Undo", key="s3_undo_btn"):
+                            st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
+                            st.session_state["_s3_drawings"] = []
+                            add_log("Undid last polygon edit", "warning")
+                            st.rerun()
+                elif st.session_state.get("edit_undo_stack"):
                     if st.button("↶ Undo Last Edit", key="s3_undo_btn"):
                         st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
                         add_log("Undid last polygon edit", "warning")
                         st.rerun()
 
+                # ── New Polygon Metadata Form ──────────────────────────────
                 pending_new = st.session_state.get("_pending_new_polys")
                 if pending_new:
-                    st.markdown('<div class="sfx-header">New Drawn Polygons — Add Metadata</div>', unsafe_allow_html=True)
-                    with st.form(key="s3_new_poly_meta_form"):
-                        new_code = st.text_input("Cluster Code (e.g. 400701_A)", key="s3_new_code")
-                        new_rate = st.number_input("Surge Rate (₹)", min_value=0.0, step=0.5, key="s3_new_rate")
-                        new_cat = st.text_input("Category (e.g. C3)", key="s3_new_cat")
-                        new_pin = st.text_input("Pincode", key="s3_new_pin")
-                        if st.form_submit_button("Save & Regenerate Image", type="primary"):
-                            poly_df = st.session_state.get("polygon_records_df").copy()
-                            target_hub = st.session_state.get("_pending_new_polys_hub", hub_filter)
-                            for new_row in pending_new:
-                                new_row.update({
-                                    "Cluster_Code": new_code, hub_col: target_hub,
-                                    "Description": str(int(new_rate)) if new_rate == int(new_rate) else str(new_rate),
-                                    "Cluster_Category": new_cat, "Pincode": new_pin,
-                                    "surge_amount": new_rate,
-                                })
-                            poly_df = pd.concat([poly_df, pd.DataFrame(pending_new)], ignore_index=True)
-                            st.session_state["polygon_records_df"] = poly_df
-                            st.session_state["_pending_new_polys"] = None
-                            st.session_state["_pending_new_polys_hub"] = None
-                            add_log(f"Added {len(pending_new)} new polygon(s) to {target_hub}: {new_code}", "success")
-                            _regenerate_hub_image(target_hub, poly_df, cdf, hub_col)
-                            st.rerun()
+                    st.markdown('<div class="sfx-header">🆕 Name Your New Polygon(s)</div>', unsafe_allow_html=True)
+                    st.info(f"You drew **{len(pending_new)} new polygon(s)**. Fill in the details below:")
+                    for _pn_idx, _pn_item in enumerate(pending_new):
+                        with st.form(key=f"s3_new_poly_form_{_pn_idx}"):
+                            st.write(f"**Polygon {_pn_idx + 1}**")
+                            _nc1, _nc2 = st.columns(2)
+                            with _nc1:
+                                new_code = st.text_input("Cluster Code *", placeholder="e.g. 400701_A", key=f"s3_code_{_pn_idx}")
+                                new_pin  = st.text_input("Pincode", placeholder="e.g. 400701", key=f"s3_pin_{_pn_idx}")
+                            with _nc2:
+                                new_rate = st.number_input("Surge Rate ₹", min_value=0.0, max_value=20.0, step=0.5, key=f"s3_rate_{_pn_idx}")
+                                new_cat  = st.text_input("Category", placeholder="e.g. C3", key=f"s3_cat_{_pn_idx}")
+                            if st.form_submit_button("✅ Add this polygon", type="primary"):
+                                if not new_code.strip():
+                                    st.error("Cluster Code is required.")
+                                else:
+                                    poly_df = st.session_state.get("polygon_records_df").copy()
+                                    target_hub = st.session_state.get("_pending_new_polys_hub", hub_filter)
+                                    _wc_new = "Polygon WKT" if "Polygon WKT" in poly_df.columns else "boundary"
+                                    new_row = dict(_pn_item)
+                                    new_row.update({
+                                        "Cluster_Code": new_code.strip(),
+                                        hub_col: target_hub,
+                                        "Description": str(int(new_rate)) if new_rate == int(new_rate) else str(new_rate),
+                                        "Cluster_Category": new_cat.strip(),
+                                        "Pincode": new_pin.strip(),
+                                        "surge_amount": new_rate,
+                                    })
+                                    poly_df = pd.concat([poly_df, pd.DataFrame([new_row])], ignore_index=True)
+                                    # Remove this item from pending list
+                                    remaining = [p for j, p in enumerate(pending_new) if j != _pn_idx]
+                                    st.session_state["polygon_records_df"] = poly_df
+                                    st.session_state["_pending_new_polys"] = remaining if remaining else None
+                                    st.session_state["_pending_new_polys_hub"] = target_hub if remaining else None
+                                    try:
+                                        poly_df.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
+                                                      index=False, encoding="utf-8-sig")
+                                    except Exception:
+                                        pass
+                                    add_log(f"Added new polygon {new_code} to {target_hub}", "success")
+                                    st.success(f"✅ Polygon '{new_code}' added!")
+                                    st.rerun()
 
-                if st.session_state.get("edit_undo_stack"):
-                    if st.button("↶ Undo Last Edit", key="s3_undo"):
-                        st.session_state["polygon_records_df"] = st.session_state["edit_undo_stack"].pop()
-                        st.rerun()
-
-                # ── Import Edited Polygons CSV ──────────────────────────────
-                st.markdown('<div class="sfx-header">💾 Save Edited Polygons</div>', unsafe_allow_html=True)
-                st.info(
-                    "**How to save:**  \n"
-                    "1. Edit polygon vertices on the map above  \n"
-                    "2. Click **✓ Save** on the Leaflet toolbar  \n"
-                    "3. Click **⬇ Save / Download Edited Polygons (CSV)** (bottom-center of map)  \n"
-                    "4. Upload the downloaded CSV below to save to the app"
-                )
-                _s3_import = st.file_uploader(
-                    "Upload edited_polygons.csv",
-                    type=["csv"],
-                    key="s3_import_edited",
-                    help="Download from the map above, then upload here",
-                )
-                # Guard flag: only process once per upload to prevent infinite rerun loop
-                if not _s3_import:
-                    st.session_state.pop("_s3_import_done", None)
-                if _s3_import and not st.session_state.get("_s3_import_done"):
-                    st.session_state["_s3_import_done"] = True
-                    try:
-                        _imp = pd.read_csv(_s3_import)
-                        _poly_s3 = st.session_state.get("polygon_records_df").copy()
-                        _wc_s3 = "Polygon WKT" if "Polygon WKT" in _poly_s3.columns else "boundary"
-                        _cc_s3 = "Cluster_Code" if "Cluster_Code" in _poly_s3.columns else "cluster_code"
-                        st.session_state.setdefault("edit_undo_stack", []).append(_poly_s3.copy())
-                        _updated_s3 = 0
-                        for _, _ir in _imp.iterrows():
-                            _cc_val = str(_ir.get("cluster_code", "")).strip()
-                            _wkt_val = str(_ir.get("geometry_wkt", "")).strip()
-                            if not _cc_val or not _wkt_val:
-                                continue
-                            _mask_s3 = _poly_s3[_cc_s3].astype(str).str.strip() == _cc_val
-                            if _mask_s3.any():
-                                _poly_s3.loc[_mask_s3, _wc_s3] = _wkt_val
-                                _updated_s3 += 1
-                        st.session_state["polygon_records_df"] = _poly_s3
-                        try:
-                            _poly_s3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
-                                            index=False, encoding="utf-8-sig")
-                        except Exception:
-                            pass
-                        add_log(f"Imported {_updated_s3} polygon edits from CSV", "success")
-                        st.success(f"✅ Saved {_updated_s3} polygon edits!")
-                        st.rerun()
-                    except Exception as _ie:
-                        st.session_state.pop("_s3_import_done", None)
-                        st.error(f"Import error: {_ie}")
+                # (end of edit_polygons block)
 
             else:
                 _s3_awb = st.session_state.get("final_result_df")
