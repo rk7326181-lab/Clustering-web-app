@@ -1654,23 +1654,13 @@ elif nav.startswith("3"):
                         },
                         edit_options={"poly": {"allowIntersection": False}},
                     ).add_to(m)
-                    # Fix: streamlit-folium looks for window.drawnItems, but folium 0.20
-                    # uses drawnItems_draw_control_<hex_hash> — regex mismatch means
-                    # all_drawings is always empty. Point window.drawnItems at the FG.
-                    _fg_js = edit_fg.get_name()
-                    m.get_root().script.add_child(
-                        folium.Element(f"window.drawnItems = {_fg_js};")
-                    )
-                    map_out_s3 = st_folium(
-                        m,
-                        width=None,
-                        height=600,
-                        returned_objects=["all_drawings", "last_active_drawing"],
-                        key=f"s3_edit_map_{hub_filter}",
-                    )
+                    # Use components.html() — st_folium fails on large Folium HTML
+                    # with MacroElement (appendChild error). components.html() renders
+                    # the HTML directly so the download button works correctly.
+                    components.html(m._repr_html_(), height=640, scrolling=False)
                 else:
-                    map_out_s3 = None
                     st.warning("Could not render editable map — no polygons to display for this hub.")
+                map_out_s3 = None  # components.html() has no return value
 
                 # ── AUTO-SAVE on Leaflet-Draw ✓ Save ──────────────────────────
                 # When draw:edited fires (user clicks ✓ on map toolbar),
@@ -2093,7 +2083,10 @@ elif nav.startswith("4"):
             import streamlit.components.v1 as components
             from modules.visualizer import create_polygon_map, create_polygon_map_cached, create_editable_polygon_map, _df_hash
             if edit_mode_s4:
-                # Edit mode: editable map with vertex dragging
+                # Edit mode: use components.html() — st_folium fails on large
+                # Folium HTML with our MacroElement (appendChild error).
+                # components.html() renders the HTML directly without st_folium's
+                # JavaScript wrapper, so the download button appears correctly.
                 m, edit_fg = create_editable_polygon_map(poly, cdf, hub_filter=sel_hub, satellite=False)
                 if m is not None and edit_fg is not None:
                     from folium.plugins import Draw
@@ -2109,16 +2102,10 @@ elif nav.startswith("4"):
                         },
                         edit_options={"poly": {"allowIntersection": False}},
                     ).add_to(m)
-                    _fg_js4 = edit_fg.get_name()
-                    m.get_root().script.add_child(folium.Element(f"window.drawnItems = {_fg_js4};"))
-                    map_out_s4 = st_folium(
-                        m, width=None, height=700,
-                        returned_objects=["all_drawings", "last_active_drawing"],
-                        key=f"s4_edit_map_{sel_hub}",
-                    )
+                    components.html(m._repr_html_(), height=720, scrolling=False)
                 else:
-                    map_out_s4 = None
                     st.warning("Could not render editable map — no polygon data for this hub.")
+                map_out_s4 = None  # components.html() has no return value
             else:
                 # Non-edit mode: use cached HTML for speed
                 html = create_polygon_map_cached(
