@@ -981,6 +981,10 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
     fg = folium.FeatureGroup(name="editable_polygons")
 
     pin_col = "Pincode" if "Pincode" in df.columns else "pincode"
+    # Support both common geometry column names
+    _wkt_col = ("Polygon WKT" if "Polygon WKT" in df.columns
+                else "boundary" if "boundary" in df.columns
+                else None)
 
     # Build polygon metadata dict for the client-side download button.
     # Keyed by "cx|cy" (centroid rounded to 6dp) so JS can match edited polygons
@@ -989,7 +993,7 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
 
     for idx, row in df.iterrows():
         try:
-            wkt = row.get("Polygon WKT", "")
+            wkt = row.get(_wkt_col, "") if _wkt_col else ""
             if pd.isna(wkt) or not wkt:
                 continue
             poly = wkt_loads(wkt)
