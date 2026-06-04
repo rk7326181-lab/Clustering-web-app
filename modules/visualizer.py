@@ -133,10 +133,9 @@ class _PolygonDownloadTool(MacroElement):
     """
     _template = Template("""
     {% macro script(this, kwargs) %}
+    /* _PolygonDownloadTool - minimal test */
     (function(){
-        var _POLY_META = {{ this.meta_json | safe }};
         var _LS_KEY = 'sfx_edited_polygons';
-        var mapObj = {{ this._parent.get_name() }};
         localStorage.removeItem(_LS_KEY);
 
         function _getOuter(ll){
@@ -164,14 +163,6 @@ class _PolygonDownloadTool(MacroElement):
         mapObj.on('draw:created',function(){setTimeout(_saveAllToLS,0);});
         mapObj.on('draw:deleted',function(){setTimeout(_saveAllToLS,0);});
 
-        function _closestMeta(cx,cy){
-            var best=null,bd=99999;
-            Object.keys(_POLY_META).forEach(function(k){
-                var p=k.split('|'),d=Math.sqrt(Math.pow(parseFloat(p[0])-cx,2)+Math.pow(parseFloat(p[1])-cy,2));
-                if(d<bd){bd=d;best=_POLY_META[k];}
-            });
-            return best||{};
-        }
         function _q(v){return'"'+String(v||'').replace(/"/g,'""')+'"';}
 
         window._downloadEditedPolygons=function(){
@@ -181,12 +172,11 @@ class _PolygonDownloadTool(MacroElement):
                 var dI=window['drawnItems_{{this.fg_name}}']||window.drawnItems;
                 if(dI){_saveAllToLS();try{entries=JSON.parse(localStorage.getItem(_LS_KEY)||'[]');}catch(e){entries=[];}}
             }
-            if(!entries||!entries.length){alert('Edit polygons, click ✓ Save on the map toolbar, then try again.');return;}
-            var rows=['"cluster_code","hub_name","pincode","description","cluster_category","geometry_wkt"'];
+            if(!entries||!entries.length){alert('Edit polygons, click Save on the toolbar, then try again.');return;}
+            var rows=['"geometry_wkt"'];
             entries.forEach(function(e){
-                var m=_closestMeta(e.cx,e.cy);
                 var wkt='POLYGON(('+e.coords.map(function(c){return c[0]+' '+c[1];}).join(', ')+'))';
-                rows.push([_q(m.cluster_code),_q(m.hub_name),_q(m.pincode),_q(m.description),_q(m.cluster_category),_q(wkt)].join(','));
+                rows.push(_q(wkt));
             });
             var blob=new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8;'});
             var url=URL.createObjectURL(blob),a=document.createElement('a');
@@ -1053,14 +1043,9 @@ def create_editable_polygon_map(polygon_df, cluster_df=None, hub_filter=None, sa
     # st_folium's iframe rendering.
     import json as _json
     _meta_js = _json.dumps(poly_meta)
-    # PolygonDownloadTool is a MacroElement — it renders as JavaScript inside
-    # the Folium map's script block and IS included by st_folium (unlike
-    # elements added to m.get_root().html which are excluded by st_folium).
-    if Template and _meta_js:
-        _PolygonDownloadTool(
-            meta_json=_meta_js,
-            fg_name=fg.get_name(),
-        ).add_to(m)
+    # Temporarily disabled MacroElement to confirm map renders
+    # if Template and _meta_js:
+    #     _PolygonDownloadTool(meta_json=_meta_js, fg_name=fg.get_name()).add_to(m)
 
     MeasureControl(
         position="topleft",
@@ -1173,15 +1158,11 @@ def create_editable_live_cluster_map(lcd, lhd=None, hub_filter=None, satellite=F
 
     fg.add_to(m)
 
-    # Client-side download button — use MacroElement (not get_root().html)
-    # so st_folium includes it in the iframe render.
-    import json as _json5
-    _lc_meta_js = _json5.dumps(lc_meta)
-    if _JT and _lc_meta_js:
-        _PolygonDownloadTool(
-            meta_json=_lc_meta_js,
-            fg_name=fg.get_name(),
-        ).add_to(m)
+    # MacroElement temporarily disabled (was causing JS syntax error)
+    # import json as _json5
+    # _lc_meta_js = _json5.dumps(lc_meta)
+    # if Template and _lc_meta_js:
+    #     _PolygonDownloadTool(meta_json=_lc_meta_js, fg_name=fg.get_name()).add_to(m)
 
     # Hub markers
     _hub_src = None

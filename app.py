@@ -1657,10 +1657,20 @@ elif nav.startswith("3"):
                     # Use components.html() — st_folium fails on large Folium HTML
                     # with MacroElement (appendChild error). components.html() renders
                     # the HTML directly so the download button works correctly.
-                    components.html(m._repr_html_(), height=640, scrolling=False)
+                    _fg_js = edit_fg.get_name()
+                    m.get_root().script.add_child(
+                        folium.Element(f"window.drawnItems = {_fg_js};")
+                    )
+                    map_out_s3 = st_folium(
+                        m,
+                        width=None,
+                        height=600,
+                        returned_objects=["all_drawings", "last_active_drawing"],
+                        key=f"s3_edit_map_{hub_filter}",
+                    )
                 else:
+                    map_out_s3 = None
                     st.warning("Could not render editable map — no polygons to display for this hub.")
-                map_out_s3 = None  # components.html() has no return value
 
                 # ── AUTO-SAVE on Leaflet-Draw ✓ Save ──────────────────────────
                 # When draw:edited fires (user clicks ✓ on map toolbar),
@@ -2102,11 +2112,16 @@ elif nav.startswith("4"):
                         },
                         edit_options={"poly": {"allowIntersection": False}},
                     ).add_to(m)
-                    # Use same rendering path as non-edit mode (m._repr_html_())
-                    components.html(m._repr_html_(), height=720, scrolling=False)
+                    _fg_js4 = edit_fg.get_name()
+                    m.get_root().script.add_child(folium.Element(f"window.drawnItems = {_fg_js4};"))
+                    map_out_s4 = st_folium(
+                        m, width=None, height=700,
+                        returned_objects=["all_drawings", "last_active_drawing"],
+                        key=f"s4_edit_map_{sel_hub}",
+                    )
                 else:
+                    map_out_s4 = None
                     st.warning("Could not render editable map — no polygon data for this hub.")
-                map_out_s4 = None  # components.html() has no return value
             else:
                 # Non-edit mode: use cached HTML for speed
                 html = create_polygon_map_cached(
