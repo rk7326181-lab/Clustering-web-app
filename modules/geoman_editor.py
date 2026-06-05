@@ -133,6 +133,19 @@ def build_geoman_editor_html(
   .leaflet-draw-edit-save{{background-color:#0B8A7A!important;color:#fff!important;}}
   .leaflet-draw-edit-remove{{background-color:#DC2626!important;color:#fff!important;}}
 
+  /* ── Smaller, less-obtrusive vertex handles ── */
+  .leaflet-editing-icon{{width:6px!important;height:6px!important;
+    margin-left:-3px!important;margin-top:-3px!important;
+    border-radius:50%!important;background:#0B8A7A!important;
+    border:1.5px solid rgba(255,255,255,0.9)!important;
+    opacity:0.85!important;box-shadow:0 1px 4px rgba(0,0,0,0.5)!important;}}
+  .leaflet-editing-icon.new-vertex{{width:5px!important;height:5px!important;
+    margin-left:-2.5px!important;margin-top:-2.5px!important;
+    background:#94a3b8!important;opacity:0.35!important;
+    border-color:rgba(255,255,255,0.5)!important;}}
+  .leaflet-touch-icon.leaflet-editing-icon{{width:10px!important;height:10px!important;
+    margin-left:-5px!important;margin-top:-5px!important;}}
+
   /* ── New polygon modal ── */
   #poly-modal{{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;}}
   #poly-modal.open{{display:flex;}}
@@ -143,12 +156,26 @@ def build_geoman_editor_html(
   .pf-row input,.pf-row select{{background:#0f172a;border:1px solid #475569;border-radius:5px;color:#f1f5f9;padding:6px 10px;font-size:13px;outline:none;}}
   .pf-row input:focus,.pf-row select:focus{{border-color:#0B8A7A;box-shadow:0 0 0 2px #0B8A7A33;}}
   .pf-row input.required-err{{border-color:#EF4444;}}
-  #pf-actions{{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}}
+  #pf-actions,#ef-actions{{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}}
+  #edit-modal{{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;}}
+  #edit-modal.open{{display:flex;}}
+  #edit-form{{background:#1e293b;border:1px solid #0B8A7A;border-radius:10px;padding:20px 24px;min-width:320px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5);}}
+  #edit-form h3{{margin:0 0 14px;font-size:14px;color:#4AEDC4;font-weight:700;letter-spacing:0.03em;}}
+  #ef-save{{background:#0B8A7A;color:#fff;border:none;border-radius:5px;padding:7px 18px;font-size:13px;font-weight:700;cursor:pointer;}}
+  #ef-save:hover{{background:#097A6C;}}
+  #ef-cancel{{background:#334155;color:#94a3b8;border:none;border-radius:5px;padding:7px 14px;font-size:13px;cursor:pointer;}}
+  #ef-cancel:hover{{background:#475569;color:#fff;}}
   #pf-save{{background:#0B8A7A;color:#fff;border:none;border-radius:5px;padding:7px 18px;font-size:13px;font-weight:700;cursor:pointer;}}
   #pf-save:hover{{background:#097A6C;}}
   #pf-cancel{{background:#334155;color:#94a3b8;border:none;border-radius:5px;padding:7px 14px;font-size:13px;cursor:pointer;}}
   #pf-cancel:hover{{background:#475569;color:#fff;}}
   #pf-err{{font-size:11px;color:#EF4444;min-height:14px;margin-top:4px;}}
+
+  /* ── ₹ rate input wrapper ── */
+  .pf-rate-wrap{{display:flex;align-items:center;background:#0f172a;border:1px solid #475569;border-radius:5px;overflow:hidden;}}
+  .pf-rate-wrap:focus-within{{border-color:#0B8A7A;box-shadow:0 0 0 2px #0B8A7A33;}}
+  .pf-rsym{{padding:6px 5px 6px 10px;color:#4AEDC4;font-weight:700;font-size:13px;user-select:none;pointer-events:none;}}
+  .pf-rate-inp{{flex:1;background:transparent;border:none;outline:none;color:#f1f5f9;padding:6px 10px 6px 0;font-size:13px;}}
 </style>
 </head>
 <body>
@@ -191,8 +218,11 @@ def build_geoman_editor_html(
       <input id="pf-pin" type="text" placeholder="e.g. 533288" maxlength="10" autocomplete="off"/>
     </div>
     <div class="pf-row">
-      <label>Rate (₹)</label>
-      <input id="pf-rate" type="number" placeholder="e.g. 1" min="0" step="1"/>
+      <label>Rate</label>
+      <div class="pf-rate-wrap">
+        <span class="pf-rsym">₹</span>
+        <input id="pf-rate" type="text" placeholder="0" inputmode="decimal" class="pf-rate-inp" autocomplete="off"/>
+      </div>
     </div>
     <div class="pf-row">
       <label>Cluster Category</label>
@@ -224,6 +254,44 @@ def build_geoman_editor_html(
     <div id="pf-actions">
       <button id="pf-cancel">Cancel</button>
       <button id="pf-save">✅ Save Polygon</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit EXISTING polygon properties modal -->
+<div id="edit-modal">
+  <div id="edit-form">
+    <h3>✏️ Edit Polygon Properties</h3>
+    <div class="pf-row"><label>Cluster Code</label>
+      <input id="ef-cc" type="text" placeholder="e.g. 533288_B" autocomplete="off"/></div>
+    <div class="pf-row"><label>Hub Name</label>
+      <input id="ef-hub" type="text" placeholder="e.g. RJY_Rampachodavaram" autocomplete="off"/></div>
+    <div class="pf-row"><label>Pincode</label>
+      <input id="ef-pin" type="text" placeholder="e.g. 533288" maxlength="10" autocomplete="off"/></div>
+    <div class="pf-row"><label>Rate</label>
+      <div class="pf-rate-wrap">
+        <span class="pf-rsym">₹</span>
+        <input id="ef-rate" type="text" placeholder="0" inputmode="decimal" class="pf-rate-inp" autocomplete="off"/>
+      </div>
+    </div>
+    <div class="pf-row"><label>Cluster Category</label>
+      <select id="ef-cat">
+        <option value="">-- Select --</option>
+        <option value="C1">C1 — ₹0.00</option><option value="C2">C2 — ₹0.50</option>
+        <option value="C3">C3 — ₹1.00</option><option value="C4">C4 — ₹1.50</option>
+        <option value="C5">C5 — ₹2.00</option><option value="C6">C6 — ₹2.50</option>
+        <option value="C7">C7 — ₹3.00</option><option value="C8">C8 — ₹3.50</option>
+        <option value="C9">C9 — ₹4.00</option><option value="C10">C10 — ₹4.50</option>
+        <option value="C11">C11 — ₹5.00</option><option value="C12">C12 — ₹6.00</option>
+        <option value="C13">C13 — ₹7.00</option><option value="C14">C14 — ₹8.00</option>
+        <option value="C15">C15 — ₹9.00</option><option value="C16">C16 — ₹10.00</option>
+        <option value="C17">C17 — ₹11.00</option><option value="C18">C18 — ₹12.00</option>
+        <option value="C19">C19 — ₹13.00</option><option value="C20">C20 — ₹15.00</option>
+      </select>
+    </div>
+    <div id="ef-actions">
+      <button id="ef-cancel">Cancel</button>
+      <button id="ef-save">✅ Save Changes</button>
     </div>
   </div>
 </div>
@@ -286,13 +354,7 @@ if (FC && FC.features && FC.features.length > 0) {{
       style: function() {{ return {{color:color,weight:2.5,fillColor:color,fillOpacity:0.35}}; }},
       onEachFeature: function(f, layer) {{
         layer._props = f.properties || {{}};
-        layer.bindPopup(
-          '<div style="font-family:Arial;font-size:12px">' +
-          '<b>' + (layer._props.cluster_code||'N/A') + '</b><br>' +
-          'Hub: ' + (layer._props.hub_name||'') + '<br>' +
-          'Pincode: ' + (layer._props.pincode||'') + '<br>' +
-          'Rate: ₹' + (layer._props.description||'') + '</div>'
-        );
+        bindLayerPopup(layer);
         layer.bindTooltip(layer._props.cluster_code||'',{{sticky:true}});
         drawnItems.addLayer(layer);
         polyLayers.push(layer);
@@ -308,6 +370,74 @@ setStatus('Polygons loaded. Use the buttons below or Leaflet toolbar (top-left) 
 // ── New polygon modal ──────────────────────────────────────────────────────
 var _pendingLayer = null;
 var DEFAULT_HUB = '{hub_filter if hub_filter not in ("All Hubs", "All") else ""}';
+
+// ── Shared popup builder — always includes an Edit button ─────────────────
+function bindLayerPopup(layer) {{
+  var p = layer._props || {{}};
+  var cc  = p.cluster_code || 'N/A';
+  var hub = p.hub_name     || '';
+  var pin = p.pincode      || '';
+  var rat = p.description  || '';
+  // Unique id per layer so the button can find it
+  var uid = 'ep_' + Math.random().toString(36).slice(2,8);
+  layer._editUid = uid;
+  layer.bindPopup(
+    '<div style="font-family:Arial;font-size:12px;min-width:180px">' +
+    '<b>' + cc + '</b><br>' +
+    'Hub: ' + hub + '<br>' +
+    'Pincode: ' + pin + '<br>' +
+    'Rate: ₹' + rat + '<br>' +
+    '<button id="' + uid + '" style="margin-top:6px;background:#0B8A7A;color:#fff;border:none;' +
+    'border-radius:4px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">' +
+    '✎ Edit Properties</button></div>'
+  );
+  layer.on('popupopen', function() {{
+    var btn = document.getElementById(uid);
+    if (btn) btn.onclick = function() {{ layer.closePopup(); openEditModal(layer); }};
+  }});
+}}
+
+// ── Edit existing polygon properties ──────────────────────────────────────
+var _editLayer = null;
+
+function openEditModal(layer) {{
+  _editLayer = layer;
+  var p = layer._props || {{}};
+  document.getElementById('ef-cc').value   = p.cluster_code || '';
+  document.getElementById('ef-hub').value  = p.hub_name     || '';
+  document.getElementById('ef-pin').value  = p.pincode      || '';
+  document.getElementById('ef-rate').value = p.description  || '';
+  document.getElementById('ef-cat').value  = p.cluster_category || '';
+  document.getElementById('edit-modal').classList.add('open');
+  setTimeout(function(){{ document.getElementById('ef-cc').focus(); }}, 80);
+}}
+
+document.getElementById('ef-save').addEventListener('click', function() {{
+  if (!_editLayer) return;
+  var cc   = document.getElementById('ef-cc').value.trim();
+  var hub  = document.getElementById('ef-hub').value.trim();
+  var pin  = document.getElementById('ef-pin').value.trim();
+  var rate = document.getElementById('ef-rate').value.replace(/[^\\d.]/g,'').trim();
+  var cat  = document.getElementById('ef-cat').value;
+  _editLayer._props = {{ cluster_code:cc, hub_name:hub, pincode:pin, description:rate, cluster_category:cat }};
+  bindLayerPopup(_editLayer);
+  _editLayer.bindTooltip(cc || 'polygon', {{sticky:true}});
+  setStatus('✅ "' + cc + '" updated. Click "Copy Edited Polygons" to export.');
+  document.getElementById('edit-modal').classList.remove('open');
+  _editLayer = null;
+}});
+
+document.getElementById('ef-cancel').addEventListener('click', function() {{
+  document.getElementById('edit-modal').classList.remove('open');
+  _editLayer = null;
+}});
+
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape' && document.getElementById('edit-modal').classList.contains('open')) {{
+    document.getElementById('edit-modal').classList.remove('open');
+    _editLayer = null;
+  }}
+}});
 
 function openPolyModal(layer) {{
   _pendingLayer = layer;
@@ -343,7 +473,7 @@ document.getElementById('pf-save').addEventListener('click', function() {{
   }}
   var hub  = document.getElementById('pf-hub').value.trim();
   var pin  = document.getElementById('pf-pin').value.trim();
-  var rate = document.getElementById('pf-rate').value.trim();
+  var rate = document.getElementById('pf-rate').value.replace(/[^\\d.]/g,'').trim();
   var cat  = document.getElementById('pf-cat').value;
 
   if (_pendingLayer) {{
@@ -354,13 +484,7 @@ document.getElementById('pf-save').addEventListener('click', function() {{
       description: rate,
       cluster_category: cat
     }};
-    _pendingLayer.bindPopup(
-      '<div style="font-family:Arial;font-size:12px">' +
-      '<b>' + cc + '</b><br>' +
-      'Hub: ' + hub + '<br>' +
-      'Pincode: ' + pin + '<br>' +
-      'Rate: ₹' + rate + '</div>'
-    );
+    bindLayerPopup(_pendingLayer);
     _pendingLayer.bindTooltip(cc, {{sticky:true}});
   }}
   document.getElementById('cnt').textContent = drawnItems.getLayers().length + ' polygons';
@@ -392,6 +516,13 @@ map.on(L.Draw.Event.EDITED, function(e) {{
 }});
 
 map.on(L.Draw.Event.DELETED, function(e) {{
+  // Disable editing on deleted layers so Leaflet.Draw does not restore them
+  e.layers.eachLayer(function(layer) {{
+    try {{ if (layer.editing) layer.editing.disable(); }} catch(err) {{}}
+    try {{ map.removeLayer(layer); }} catch(err) {{}}
+    var idx = polyLayers.indexOf(layer);
+    if (idx > -1) polyLayers.splice(idx, 1);
+  }});
   document.getElementById('cnt').textContent = drawnItems.getLayers().length + ' polygons';
   setStatus('✅ Polygon(s) deleted. Click "Copy Edited Polygons" to export.');
 }});
