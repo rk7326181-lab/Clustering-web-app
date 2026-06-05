@@ -1651,8 +1651,9 @@ elif nav.startswith("3"):
                 # ── Import edited polygons (pasted from Geoman map) ───────────
                 st.markdown('<div class="sfx-header">💾 Import Edited Polygons</div>', unsafe_allow_html=True)
                 st.info(
-                    "**Steps:** In the map above → click **✏ Edit** toolbar icon → drag vertices → "
-                    "click **📋 Copy Edited GeoJSON** button → paste below → click **Save**."
+                    "**Edit vertices:** click ✏️ Edit Vertices → drag → click 📋 Copy → paste below → Save.  \n"
+                    "**Delete polygon:** click 🗑 Delete Polygon → click the red polygon → "
+                    "the updated CSV is **auto-copied to clipboard** → paste below → Save."
                 )
                 _sc1, _sc2 = st.columns(2)
                 # Show Save button only when there's pasted data
@@ -1711,14 +1712,45 @@ elif nav.startswith("3"):
                                             _new_row["Hub Name"] = hub_filter
                                         _poly_s3 = pd.concat([_poly_s3, pd.DataFrame([_new_row])], ignore_index=True)
                                         _updated_s3 += 1
+                                # ── Remove polygons the user deleted in the editor ──
+                                # Any polygon that was in this hub BEFORE editing but is
+                                # ABSENT from the pasted CSV has been deleted.  We scope
+                                # the removal to the currently-filtered hub so polygons
+                                # from other hubs are never accidentally removed.
+                                _pasted_codes = set(
+                                    _imp["cluster_code"].astype(str).str.strip().tolist()
+                                )
+                                _hub_col_s3 = (
+                                    "Hub Name" if "Hub Name" in _poly_s3.columns
+                                    else "hub_name"
+                                )
+                                if hub_filter and hub_filter not in ("All Hubs", "All"):
+                                    _in_hub_mask = (
+                                        _poly_s3[_hub_col_s3].astype(str).str.strip()
+                                        == hub_filter
+                                    )
+                                    _to_del = (
+                                        _in_hub_mask
+                                        & ~_poly_s3[_cc_s3].astype(str).str.strip()
+                                        .isin(_pasted_codes)
+                                    )
+                                else:
+                                    # All-hubs paste: remove anything not in pasted CSV
+                                    _to_del = ~_poly_s3[_cc_s3].astype(str).str.strip().isin(_pasted_codes)
+                                _n_deleted = int(_to_del.sum())
+                                if _n_deleted > 0:
+                                    _poly_s3 = _poly_s3[~_to_del].reset_index(drop=True)
+                                    _updated_s3 += _n_deleted  # count towards change total
+
                                 st.session_state["polygon_records_df"] = _poly_s3
                                 try:
                                     _poly_s3.to_csv(os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_edited.csv"),
                                                     index=False, encoding="utf-8-sig")
                                 except Exception:
                                     pass
-                                add_log(f"Geoman: saved {_updated_s3} polygon edits", "success")
-                                st.success(f"✅ Saved {_updated_s3} polygon edits!")
+                                _del_msg = f", {_n_deleted} deleted" if _n_deleted > 0 else ""
+                                add_log(f"Geoman: saved {_updated_s3} polygon changes ({_n_deleted} deleted)", "success")
+                                st.success(f"✅ Saved {_updated_s3} polygon changes{_del_msg}!")
                                 st.rerun()
                             except Exception as _pe:
                                 st.session_state.pop("_s3_import_done", None)

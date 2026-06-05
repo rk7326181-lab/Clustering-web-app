@@ -537,7 +537,58 @@ function setBtnOn(id) {{
   var el=document.getElementById(id); if(el) el.classList.add('on');
 }}
 
+// ── Direct single-click delete mode (no Leaflet.Draw two-step confirm) ────
+var _deleteMode = false;
+var _deleteModeListeners = []; // {{layer, fn}} pairs for cleanup
+
+function enterDeleteMode() {{
+  _deleteMode = true;
+  map.getContainer().style.cursor = 'crosshair';
+  drawnItems.eachLayer(function(layer) {{
+    // Highlight polygon in red so user knows it is deletable
+    try {{ layer.setStyle({{color:'#DC2626',fillColor:'#DC2626',fillOpacity:0.45,weight:3}}); }} catch(e){{}}
+    var fn = function(e) {{
+      if (!_deleteMode) return;
+      L.DomEvent.stopPropagation(e);
+      map.closePopup();
+      var cc = (layer._props && layer._props.cluster_code) || 'this polygon';
+      if (!confirm('Delete polygon "' + cc + '"?')) return;
+      // Disable Leaflet.Draw editing on this layer BEFORE removing so it
+      // cannot be restored when edit mode exits
+      try {{ if (layer.editing) layer.editing.disable(); }} catch(err){{}}
+      drawnItems.removeLayer(layer);
+      try {{ map.removeLayer(layer); }} catch(err){{}}
+      var idx = polyLayers.indexOf(layer);
+      if (idx > -1) polyLayers.splice(idx, 1);
+      // Remove this layer from listener list
+      _deleteModeListeners = _deleteModeListeners.filter(function(x){{ return x.layer !== layer; }});
+      document.getElementById('cnt').textContent = drawnItems.getLayers().length + ' polygons';
+      // Auto-copy the updated CSV to clipboard so the user only needs to
+      // paste below and click Save — the deleted polygon is excluded from
+      // the copy because it has already been removed from drawnItems.
+      autoCopyCSV(cc);
+    }};
+    layer.on('click', fn);
+    _deleteModeListeners.push({{layer:layer, fn:fn}});
+  }});
+  setStatus('🗑 Delete mode: click any (red) polygon to remove it immediately. Press Exit Mode when done.');
+}}
+
+function exitDeleteMode() {{
+  _deleteMode = false;
+  map.getContainer().style.cursor = '';
+  _deleteModeListeners.forEach(function(x) {{
+    try {{ x.layer.off('click', x.fn); }} catch(e){{}}
+    // Restore original hub colour
+    var hub = (x.layer._props && x.layer._props.hub_name) || '';
+    var col = hubColors[hub] || '#36A2EB';
+    try {{ x.layer.setStyle({{color:col,fillColor:col,fillOpacity:0.35,weight:2.5}}); }} catch(e){{}}
+  }});
+  _deleteModeListeners = [];
+}}
+
 function exitAllModes() {{
+  exitDeleteMode();
   setBtnOn(null);
   if (activeCtrl) {{
     try {{ activeCtrl.disable(); }} catch(e){{}}
@@ -589,14 +640,7 @@ document.getElementById('btn-draw').addEventListener('click', function() {{
 document.getElementById('btn-delete').addEventListener('click', function() {{
   exitAllModes();
   setBtnOn('btn-delete');
-  try {{
-    new L.EditToolbar.Delete(map, {{featureGroup:drawnItems}}).enable();
-    setStatus('🗑 Delete mode: click any polygon to remove it. Click Save (checkmark) to confirm.');
-  }} catch(e) {{
-    var delBtn = document.querySelector('.leaflet-draw-edit-remove');
-    if (delBtn) delBtn.click();
-    setStatus('🗑 Click the trash icon in the map toolbar to delete polygons.');
-  }}
+  enterDeleteMode();
 }});
 
 document.getElementById('btn-exit').addEventListener('click', function() {{
@@ -649,6 +693,48 @@ function copyCSV() {{
 
 document.getElementById('copy-btn').addEventListener('click', copyCSV);
 document.addEventListener('keydown', function(e){{if((e.ctrlKey||e.metaKey)&&e.key==='s'){{e.preventDefault();copyCSV();}}}});
+
+// ── Auto-copy after delete: copies the CSV (minus deleted polygon) to
+// clipboard and shows a banner instructing the user to paste & save ────────
+function autoCopyCSV(deletedCode) {{
+  var rows = ['"cluster_code","hub_name","pincode","description","cluster_category","geometry_wkt"'];
+  var count = 0;
+  drawnItems.eachLayer(function(layer) {{
+    try {{
+      var gj = layer.toGeoJSON();
+      var geom = gj.geometry;
+      if (!geom || !geom.coordinates || !geom.coordinates[0]) return;
+      var coords = geom.type === 'Polygon' ? geom.coordinates[0] :
+                   (geom.type === 'MultiPolygon' ? geom.coordinates[0][0] : null);
+      if (!coords || coords.length < 4) return;
+      var f=coords[0],l=coords[coords.length-1];
+      if(f[0]!==l[0]||f[1]!==l[1]) coords=coords.concat([[f[0],f[1]]]);
+      var wkt='POLYGON(('+coords.map(function(c){{return c[0]+' '+c[1];}}).join(', ')+'))';
+      var p=layer._props||{{}};
+      function q(v){{return'"'+String(v||'').replace(/"/g,'""')+'"';}}
+      rows.push([q(p.cluster_code),q(p.hub_name),q(p.pincode),q(p.description),q(p.cluster_category),q(wkt)].join(','));
+      count++;
+    }} catch(e){{}}
+  }});
+  var csv = rows.join('\\n');
+  // Show CSV in outbox so user can also manually copy
+  document.getElementById('outbox').textContent = csv;
+  document.getElementById('outbox').style.borderColor = '#DC2626';
+  // Try clipboard write
+  var msg = '🗑 "' + deletedCode + '" deleted (' + count + ' polygons remain). ' +
+            '⚠️ PASTE THE CSV BELOW THE MAP AND CLICK SAVE to apply permanently — ' +
+            'otherwise the polygon will reappear on next reload.';
+  if (navigator.clipboard && csv.length > 0) {{
+    navigator.clipboard.writeText(csv).then(function() {{
+      setStatus('🗑 Deleted "' + deletedCode + '" — CSV auto-copied ✅  Paste below + Save to apply permanently.');
+      document.getElementById('outbox').style.borderColor = '#DC2626';
+    }}).catch(function() {{
+      setStatus(msg);
+    }});
+  }} else {{
+    setStatus(msg);
+  }}
+}}
 
 // ── AWB dots ───────────────────────────────────────────────────────────────
 var AWB_POINTS = {awb_json};
