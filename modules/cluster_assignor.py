@@ -101,8 +101,35 @@ def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
 
     # ── Spatial join (vectorised) ─────────────────────────────────────────────
     if clusters and polygons:
+        # Build pin→hub map from AWB data (most frequent hub per pincode).
+        # Used to tag each polygon with its own hub so cross-hub polygon
+        # leakage is rejected before accepting a match (fixes inflated burn
+        # where neighbouring hubs' overlapping polygons captured wrong AWBs).
+        pin2hub: dict = {}
+        if len(hubs) > 0:
+            _hub_series = pd.Series(hubs, dtype=object)
+            _pin_series = pd.Series(pincodes)
+            _hub_notnull = _hub_series.notna() & (_hub_series != "")
+            if _hub_notnull.any():
+                _tmp = pd.DataFrame({"pin": _pin_series, "hub": _hub_series})[_hub_notnull]
+                pin2hub = (
+                    _tmp.groupby("pin")["hub"]
+                    .agg(lambda s: s.mode().iloc[0])
+                    .to_dict()
+                )
+
+        def _poly_hub(name):
+            """Derive hub from cluster name prefix e.g. '277209_B' → hub of pin 277209."""
+            parts = str(name).split("_")
+            if parts and parts[0].replace(".", "").isdigit():
+                try:
+                    return pin2hub.get(int(float(parts[0])))
+                except (ValueError, TypeError):
+                    pass
+            return None
+
         pts_gdf = gpd.GeoDataFrame(
-            {"_orig_i": np.arange(n)},
+            {"_orig_i": np.arange(n), "awb_hub": hubs},
             geometry=gpd.points_from_xy(lons, lats),
             crs="EPSG:4326",
         )
@@ -110,6 +137,7 @@ def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
             {
                 "cluster_name": [c["name"] for c in clusters],
                 "description":  [c["description"] for c in clusters],
+                "poly_hub":     [_poly_hub(c["name"]) for c in clusters],
             },
             geometry=[c["polygon"] for c in clusters],
             crs="EPSG:4326",
@@ -119,6 +147,17 @@ def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
             progress_cb(0.20)
 
         joined = gpd.sjoin(pts_gdf, polys_gdf, how="left", predicate="within")
+
+        # Drop cross-hub matches BEFORE dedup so a same-hub polygon is never
+        # shadowed by an earlier cross-hub match in the CSV row order.
+        # Keep a row when: no polygon matched (NaN), AWB hub unknown, or hubs agree.
+        keep = (
+            joined["cluster_name"].isna()
+            | joined["awb_hub"].isna()
+            | (joined["awb_hub"].astype(str) == "")
+            | (joined["awb_hub"] == joined["poly_hub"])
+        )
+        joined = joined[keep]
         joined = joined.drop_duplicates(subset=["_orig_i"])
         matched = joined[joined["cluster_name"].notna()]
         if not matched.empty:
