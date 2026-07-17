@@ -63,13 +63,17 @@ FALLBACK_PINCODE_MAP = {
     584128: "C2", 110074: "C2", 800001: "C0",
 }
 
+# Anchor paths to the repo root so auto-load works regardless of the launch cwd
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 def _get_output_dir():
     """Use /tmp/ on Streamlit Cloud (read-only filesystem), local outputs/ otherwise."""
     if os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true":
         return os.path.join("/tmp", "outputs")
-    return "outputs"
+    return os.path.join(_REPO_ROOT, "outputs")
 
 OUTPUT_DIR = _get_output_dir()
+DATA_DIR = os.path.join(_REPO_ROOT, "data")
 HUB_IMG_DIR = os.path.join(OUTPUT_DIR, "Hub_Payout_Views_Final_All_Hubs")
 
 # Path to the file that remembers user-specified file paths across sessions
@@ -230,11 +234,10 @@ ALL_STATE_KEYS = {
     "polygon_records_df": None, "awb_raw_df": None,
     "final_result_df": None, "bq_credentials": None,
     "radius_limit_km": 5.0, "hub_radius_map": {}, "hub_images": {},
-    "live_cluster_df": None, "live_hub_df": None,
-    "last_refresh_time": None, "groq_api_key": None,
+    "groq_api_key": None,
     "ai_chat_history": [], "ai_auto_report": None, "burn_analysis_report": None,
     "bq_client": None, "bq_auth_mode": None, "last_bq_fetch": None,
-    "lc_ai_report": None, "edit_undo_stack": [], "edit_redo_stack": [],
+    "edit_undo_stack": [], "edit_redo_stack": [],
     "custom_markers": [], "drawn_shapes": [],
     "sidebar_chat_history": [], "auto_run_requested": False,
 }
@@ -244,6 +247,14 @@ def init_session_state():
     for k, v in ALL_STATE_KEYS.items():
         if k not in st.session_state:
             st.session_state[k] = v if not isinstance(v, (dict, list)) else v.copy() if isinstance(v, dict) else list(v)
+
+
+def _set_if_none(key, value):
+    """Assign a session-state value unless one is already set.
+    (session_state.setdefault is a no-op here because init_session_state
+    pre-creates every key with value None.)"""
+    if st.session_state.get(key) is None:
+        st.session_state[key] = value
 
 
 def reload_from_disk():
@@ -268,7 +279,7 @@ def reload_from_disk():
     ]
     for key, path in csv_mapping:
         if st.session_state.get(key) is None:
-            for p in [path, os.path.join("data", os.path.basename(path))]:
+            for p in [path, os.path.join(DATA_DIR, os.path.basename(path))]:
                 if os.path.exists(p):
                     try:
                         df = pd.read_csv(p)
@@ -288,7 +299,7 @@ def reload_from_disk():
     # These are saved once and reused across sessions (no need to re-upload)
     if st.session_state.get("pincodes_df") is None:
         for p in [os.path.join(OUTPUT_DIR, "pincodes_ref.csv"),
-                  os.path.join("data", "pincodes_ref.csv")]:
+                  os.path.join(DATA_DIR, "pincodes_ref.csv")]:
             if os.path.exists(p):
                 try:
                     df = pd.read_csv(p)
@@ -301,10 +312,10 @@ def reload_from_disk():
                                       "delivery_longitude","vol_long"]
                     for c in lat_candidates:
                         if c in df.columns:
-                            st.session_state.setdefault("vol_lat_col", c); break
+                            _set_if_none("vol_lat_col", c); break
                     for c in lon_candidates:
                         if c in df.columns:
-                            st.session_state.setdefault("vol_long_col", c); break
+                            _set_if_none("vol_long_col", c); break
                     loaded.append("pincodes_ref.csv (persistent)")
                 except Exception:
                     pass
@@ -312,11 +323,17 @@ def reload_from_disk():
 
     if st.session_state.get("geojson_data") is None:
         for p in [os.path.join(OUTPUT_DIR, "geojson_boundaries.json"),
-                  os.path.join("data", "geojson_boundaries.json")]:
+                  os.path.join(DATA_DIR, "geojson_boundaries.json"),
+                  os.path.join(DATA_DIR, "geojson_boundaries.json.gz")]:
             if os.path.exists(p):
                 try:
-                    with open(p, "r", encoding="utf-8") as _f:
-                        data = json.load(_f)
+                    if p.endswith(".gz"):
+                        import gzip
+                        with gzip.open(p, "rt", encoding="utf-8") as _f:
+                            data = json.load(_f)
+                    else:
+                        with open(p, "r", encoding="utf-8") as _f:
+                            data = json.load(_f)
                     if "features" in data:
                         st.session_state["geojson_data"] = data
                         st.session_state["upload_status"]["geojson"] = True
@@ -324,7 +341,7 @@ def reload_from_disk():
                         sample = data["features"][0].get("properties", {}) if data["features"] else {}
                         for key in ["pincode", "Pincode", "PINCODE", "pin", "PIN"]:
                             if key in sample:
-                                st.session_state.setdefault("geojson_pincode_field", key)
+                                _set_if_none("geojson_pincode_field", key)
                                 break
                         loaded.append("geojson_boundaries.json (persistent)")
                 except Exception:
@@ -347,9 +364,9 @@ def reload_from_disk():
                     st.session_state["pincodes_df"] = df
                     st.session_state["upload_status"]["pincodes"] = True
                     if lat_c:
-                        st.session_state.setdefault("vol_lat_col", lat_c)
+                        _set_if_none("vol_lat_col", lat_c)
                     if lon_c:
-                        st.session_state.setdefault("vol_long_col", lon_c)
+                        _set_if_none("vol_long_col", lon_c)
                     loaded.append(f"Pincodes (remembered path)")
             except Exception:
                 pass
@@ -369,7 +386,7 @@ def reload_from_disk():
                             break
                     st.session_state["geojson_data"] = data
                     st.session_state["upload_status"]["geojson"] = True
-                    st.session_state.setdefault("geojson_pincode_field", pf)
+                    _set_if_none("geojson_pincode_field", pf)
                     loaded.append("GeoJSON (remembered path)")
             except Exception:
                 pass
@@ -405,9 +422,9 @@ def reload_from_disk():
                 st.session_state["pincodes_df"] = df
                 st.session_state["upload_status"]["pincodes"] = True
                 if lat_c:
-                    st.session_state.setdefault("vol_lat_col", lat_c)
+                    _set_if_none("vol_lat_col", lat_c)
                 if lon_c:
-                    st.session_state.setdefault("vol_long_col", lon_c)
+                    _set_if_none("vol_long_col", lon_c)
                 save_file_path("pincodes_csv", _HC_PINCODES)
                 loaded.append("Pincodes 1.csv (hardcoded path)")
         except Exception:
@@ -426,7 +443,7 @@ def reload_from_disk():
                         break
                 st.session_state["geojson_data"] = data
                 st.session_state["upload_status"]["geojson"] = True
-                st.session_state.setdefault("geojson_pincode_field", pf)
+                _set_if_none("geojson_pincode_field", pf)
                 save_file_path("geojson", _HC_GEOJSON)
                 loaded.append("GeoJSON (hardcoded path)")
         except Exception:

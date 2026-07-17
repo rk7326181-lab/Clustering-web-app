@@ -283,7 +283,7 @@ from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
                    save_file_path, load_file_paths_config, _filter_geojson_to_cluster,
                    CLUSTER_MAP, DESCRIPTION_MAPPING, HUB_COLORS, PRICING_SLABS,
                    PCAT_SOP, RATE_TO_PCAT, rate_to_pcat,
-                   OUTPUT_DIR, HUB_IMG_DIR)
+                   OUTPUT_DIR, HUB_IMG_DIR, DATA_DIR)
 
 init_session_state()
 ensure_output_dirs()
@@ -306,6 +306,17 @@ def add_log(msg, level="info"):
     logs.append({"msg": msg, "level": level, "time": datetime.now().strftime("%H:%M:%S")})
     if len(logs) > 200:  # Prevent unbounded memory growth
         st.session_state["app_logs"] = logs[-100:]
+
+def render_step_guard(missing, hint):
+    """Friendly guard for steps opened before their input data exists: list what's
+    missing, offer a jump to Step 1, and stop rendering the rest of the page."""
+    items = "".join(f"<li>{m}</li>" for m in missing)
+    st.markdown(
+        f'<div class="sfx-warn"><b>This step needs data that is not loaded yet:</b>'
+        f'<ul>{items}</ul>{hint}</div>', unsafe_allow_html=True)
+    st.button("Go to Step 1 — Data Ingestion", key="_guard_goto1",
+              on_click=lambda: st.session_state.update(nav="1. Data Ingestion"))
+    st.stop()
 
 def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
     """Render and save a PNG for a single hub using its current polygons. Returns the saved path or None."""
@@ -596,10 +607,9 @@ nav = st.sidebar.radio("NAVIGATE", [
     "2. P Mapping",
     "3. Polygon Gen + Editor",
     "4. AWB + Visualisation",
-    "5. Live Clusters",
-    "6. Financial Intelligence",
-    "7. AI Agent",
-], index=0)
+    "5. Financial Intelligence",
+    "6. AI Agent",
+], index=0, key="nav")
 
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 
@@ -621,16 +631,6 @@ for label, done in steps:
     icon = "✓" if done else "○"
     st.sidebar.markdown(f'<div class="sfx-status {cls}"><span class="icon">{icon}</span><span class="lbl">{label}</span></div>', unsafe_allow_html=True)
 
-# ── Scheduled Refresh Status (sidebar badge) ──
-if st.session_state.get("sched_refresh_enabled"):
-    _sh = st.session_state.get("sched_hour", 9)
-    _sm = st.session_state.get("sched_min", 0)
-    st.sidebar.markdown(
-        f'<div class="sfx-badge sfx-badge--ok" style="margin:4px 0"><span class="dot"></span>'
-        f'Auto-Refresh: {_sh:02d}:{_sm:02d} IST daily</div>',
-        unsafe_allow_html=True,
-    )
-
 # ── Clear Cache Button ──
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 if st.sidebar.button("Clear All Cache", key="clear_cache"):
@@ -641,7 +641,7 @@ if st.sidebar.button("Clear All Cache", key="clear_cache"):
         drop_all()
     except Exception:
         pass
-    for cache_key in ["live_cluster_df_cache", "_pip_awb_stats", "_pip_data_id", "_hub_pin_counts_cache", "_ms_hex_cache"]:
+    for cache_key in ["_pip_awb_stats", "_pip_data_id", "_hub_pin_counts_cache", "_ms_hex_cache"]:
         st.session_state.pop(cache_key, None)
     add_log("All caches cleared", "warning")
     st.rerun()
@@ -688,17 +688,16 @@ st.sidebar.markdown('<div class="sfx-footer">© 2026 Shadowfax Technologies</div
 # ═══════════════════════════════════════════════════════
 # HEADER — Step Progress Pills
 # ═══════════════════════════════════════════════════════
-step_names = {1: "Data Ingestion", 2: "P-Mapping", 3: "Polygon Gen", 4: "AWB Analysis", 5: "Live Clusters", 6: "Financial Intel", 7: "AI Agent"}
+step_names = {1: "Data Ingestion", 2: "P-Mapping", 3: "Polygon Gen", 4: "AWB Analysis", 5: "Financial Intel", 6: "AI Agent"}
 step_done = {
     1: status["cluster"] and status["pincodes"],
     2: st.session_state.get("final_output_df") is not None,
     3: st.session_state.get("polygon_records_df") is not None,
     4: st.session_state.get("final_result_df") is not None,
-    5: st.session_state.get("live_cluster_df") is not None,
+    5: False,
     6: False,
-    7: False,
 }
-current_step = int(nav[0]) if nav[0].isdigit() else 7
+current_step = int(nav[0]) if nav[0].isdigit() else 6
 pills_html = '<div class="step-pills">'
 for i, name in step_names.items():
     cls = "complete" if step_done[i] else ("active" if i == current_step else "idle")
@@ -807,27 +806,6 @@ if st.session_state.get("auto_run_requested"):
         elif not bq:
             steps_failed.append("Step 4: AWB Analysis ⏭ (no BigQuery connection)")
 
-        # Step 5: Live Clusters
-        if st.session_state.get("live_cluster_df") is None and bq:
-            try:
-                auto_progress.progress(0.85, text="Fetching live clusters...")
-                from modules.bigquery_client import fetch_live_clusters, fetch_hub_locations
-                cd, e1 = fetch_live_clusters(bq)
-                hd, e2 = fetch_hub_locations(bq, datetime.now().year, datetime.now().month)
-                if e1:
-                    steps_failed.append(f"Step 5: Live Clusters ❌ ({e1})")
-                else:
-                    st.session_state["live_cluster_df"] = cd
-                    if not e2:
-                        st.session_state["live_hub_df"] = hd
-                    st.session_state["last_refresh_time"] = datetime.now()
-                    steps_completed.append(f"Step 5: Live Clusters ✅ ({len(cd)} clusters)")
-                    add_log(f"Auto-run: Live clusters loaded ({len(cd)})", "success")
-            except Exception as e:
-                steps_failed.append(f"Step 5: Live Clusters ❌ ({e})")
-        elif st.session_state.get("live_cluster_df") is not None:
-            steps_completed.append("Step 5: Live Clusters ✅ (already done)")
-
         auto_progress.progress(1.0, text="Pipeline complete!")
 
         # Show results
@@ -906,7 +884,7 @@ if nav.startswith("1"):
         st.markdown("#### Pincodes Reference")
         # Show persistent status
         _pin_saved = os.path.exists(os.path.join(OUTPUT_DIR, "pincodes_ref.csv"))
-        if _pin_saved and st.session_state.get("pincodes_df") is not None and not st.session_state.get("_pin_new_upload"):
+        if st.session_state.get("pincodes_df") is not None and not st.session_state.get("_pin_new_upload"):
             st.markdown('<div class="sfx-ok">📂 Auto-loaded from disk — re-upload to replace</div>', unsafe_allow_html=True)
         f2 = st.file_uploader("Upload pincodes.csv", type=["csv"], key="up_pin")
         if f2:
@@ -954,7 +932,7 @@ if nav.startswith("1"):
         st.markdown("#### GeoJSON Boundaries")
         # Show persistent status
         _geo_saved = os.path.exists(os.path.join(OUTPUT_DIR, "geojson_boundaries.json"))
-        if _geo_saved and st.session_state.get("geojson_data") is not None and not st.session_state.get("_geo_new_upload"):
+        if st.session_state.get("geojson_data") is not None and not st.session_state.get("_geo_new_upload"):
             st.markdown('<div class="sfx-ok">📂 Auto-loaded from disk — re-upload to replace</div>', unsafe_allow_html=True)
         geo_mode = st.radio("Method", ["Upload", "File Path", "Skip"], horizontal=True, key="geo_mode")
         if geo_mode == "Upload":
@@ -1020,10 +998,10 @@ if nav.startswith("1"):
     st.markdown('<div class="sfx-header">Load Existing Files</div>', unsafe_allow_html=True)
     lc1, lc2, lc3, lc4 = st.columns(4)
     for col, key, paths, label in [
-        (lc1, "final_output_df", [os.path.join(OUTPUT_DIR, "final_output.csv"), "data/final_output.csv"], "final_output"),
-        (lc2, "polygon_records_df", [os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_latest.csv"), os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_4KM.csv"), "data/Clustering_payout_polygon_4KM.csv"], "polygons"),
-        (lc3, "awb_raw_df", [os.path.join(OUTPUT_DIR, "Awb_with_polygon_mapping.csv"), "data/Awb_with_polygon_mapping.csv"], "AWB raw"),
-        (lc4, "final_result_df", [os.path.join(OUTPUT_DIR, "Awb_with_cluster_info.csv"), "data/Awb_with_cluster_info.csv"], "AWB cluster"),
+        (lc1, "final_output_df", [os.path.join(OUTPUT_DIR, "final_output.csv"), os.path.join(DATA_DIR, "final_output.csv")], "final_output"),
+        (lc2, "polygon_records_df", [os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_latest.csv"), os.path.join(OUTPUT_DIR, "Clustering_payout_polygon_4KM.csv"), os.path.join(DATA_DIR, "Clustering_payout_polygon_4KM.csv")], "polygons"),
+        (lc3, "awb_raw_df", [os.path.join(OUTPUT_DIR, "Awb_with_polygon_mapping.csv"), os.path.join(DATA_DIR, "Awb_with_polygon_mapping.csv")], "AWB raw"),
+        (lc4, "final_result_df", [os.path.join(OUTPUT_DIR, "Awb_with_cluster_info.csv"), os.path.join(DATA_DIR, "Awb_with_cluster_info.csv")], "AWB cluster"),
     ]:
         with col:
             if st.button(f"Load {label}", key=f"ql_{key}"):
@@ -1050,7 +1028,8 @@ elif nav.startswith("2"):
     st.markdown('<div class="sfx-header">Step 2 — P Mapping (Distance-Based Payout)</div>', unsafe_allow_html=True)
     cdf = st.session_state.get("cluster_df"); pdf = st.session_state.get("pincodes_df")
     if cdf is None or pdf is None:
-        st.markdown('<div class="sfx-warn">Upload Cluster CSV and Pincodes CSV first (Step 1).</div>', unsafe_allow_html=True); st.stop()
+        _missing = [n for n, v in [("Cluster CSV (Pincode / Hub / lat / long)", cdf), ("Pincodes reference CSV", pdf)] if v is None]
+        render_step_guard(_missing, "Upload in Step 1 — files are remembered and auto-load on the next run.")
     vlat = st.session_state.get("vol_lat_col", "Volumetric Lat"); vlon = st.session_state.get("vol_long_col", "Volumetric Long")
     fc1, fc2 = st.columns(2)
     with fc1:
@@ -1235,7 +1214,7 @@ elif nav.startswith("3"):
     st.markdown('<div class="sfx-header">Step 3 — Polygon Generation + Editor</div>', unsafe_allow_html=True)
     cdf = st.session_state.get("cluster_df")
     if cdf is None:
-        st.markdown('<div class="sfx-warn">Upload Cluster CSV first (Step 1).</div>', unsafe_allow_html=True); st.stop()
+        render_step_guard(["Cluster CSV (hub–pincode list)"], "Polygon generation needs hub coordinates from the Cluster CSV — upload it in Step 1.")
     hub_list = cdf["Hub_Name"].unique().tolist()
     hub_filter = st.selectbox("Filter by Hub", ["All Hubs"] + hub_list, key="poly_hub")
 
@@ -2035,7 +2014,7 @@ elif nav.startswith("4"):
         st.markdown('<div class="sfx-header">Hub Visualisation Map</div>', unsafe_allow_html=True)
         poly = st.session_state.get("polygon_records_df"); cdf = st.session_state.get("cluster_df"); rdf = st.session_state.get("final_result_df")
         if poly is None:
-            st.markdown('<div class="sfx-warn">Load polygon data first.</div>', unsafe_allow_html=True); st.stop()
+            render_step_guard(["Polygon data"], "Generate polygons in Step 3, or load saved polygons via Step 1. The other two tabs on this page work without it.")
         hub_col = "Hub Name" if "Hub Name" in poly.columns else "hub_name"
         hubs = poly[hub_col].unique().tolist()
         vc1, vc2, vc3, vc4, vc5 = st.columns(5)
@@ -2051,15 +2030,7 @@ elif nav.startswith("4"):
             rate_filter = st.selectbox("Rate Filter", ["All"] + [f"₹{i}" for i in range(0, 9)] + ["Nil"], key="viz_rate")
         with vc5:
             s4_show_rate_labels = st.checkbox("Show Rate Labels", value=True, key="s4_show_rate_labels")
-        # Hub type filter
-        lhd = st.session_state.get("live_hub_df")
-        hub_type_options = ["All Types"]
-        if lhd is not None and "hub_category" in lhd.columns:
-            hub_type_options += lhd["hub_category"].dropna().unique().tolist()
-        if len(hub_type_options) > 1:
-            hub_type = st.selectbox("Hub Type", hub_type_options, key="viz_hub_type")
-        else:
-            hub_type = "All Types"
+        hub_type = "All Types"
         st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
         if not edit_mode_s4:
             st.session_state.pop("_s4_import_done", None)
@@ -2280,863 +2251,13 @@ elif nav.startswith("4"):
                     st.caption(f"KML error: {_ek}")
 
 # ═══════════════════════════════════════════════════════
-# STEP 5 — LIVE CLUSTERS (Full Integration)
+# STEP 5 — FINANCIAL INTELLIGENCE
 # ═══════════════════════════════════════════════════════
 elif nav.startswith("5"):
-    st.markdown('<div class="sfx-header">Step 5 — Live Clusters</div>', unsafe_allow_html=True)
-    bq_client = st.session_state.get("bq_client")
-    if not bq_client:
-        st.markdown('<div class="sfx-err">BigQuery not connected. Set up connection via sidebar.</div>', unsafe_allow_html=True)
-        st.stop()
-
-    bq_mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account", "streamlit_secrets": "Cloud Secrets"}.get(
-        st.session_state.get("bq_auth_mode", "?"), "?")
-    st.markdown(f'<div class="sfx-ok">BigQuery Connected ({bq_mode_label})</div>', unsafe_allow_html=True)
-
-    last = st.session_state.get("last_refresh_time")
-    need_refresh = last is None or (datetime.now() - last).total_seconds() > 86400
-    if last:
-        st.caption(f"Last refreshed: {last.strftime('%Y-%m-%d %H:%M')}")
-    if need_refresh:
-        st.markdown('<div class="sfx-warn">Data stale (>24h). Consider refreshing.</div>', unsafe_allow_html=True)
-
-    lc1, lc2 = st.columns(2)
-    with lc1:
-        year = st.number_input("Year", 2020, 2030, datetime.now().year, key="lc_yr")
-    with lc2:
-        month = st.number_input("Month", 1, 12, datetime.now().month, key="lc_mn")
-
-    # ── Scheduled Auto-Refresh ────────────────────────────────
-    with st.expander("⏰ Schedule Auto-Refresh", expanded=st.session_state.get("sched_refresh_enabled", False)):
-        import pytz as _pytz
-        _ist = _pytz.timezone("Asia/Kolkata")
-        _now_ist = datetime.now(_ist)
-
-        _sched_enabled = st.toggle(
-            "Enable Scheduled Refresh",
-            value=st.session_state.get("sched_refresh_enabled", False),
-            key="sched_toggle",
-            help="Auto-fetches BigQuery data at the configured IST time every day.",
-        )
-        st.session_state["sched_refresh_enabled"] = _sched_enabled
-
-        _sh1, _sh2, _sh3 = st.columns(3)
-        with _sh1:
-            _sched_hour = st.number_input(
-                "Hour (IST)", 0, 23,
-                value=st.session_state.get("sched_hour", 9),
-                key="sched_hr",
-            )
-        with _sh2:
-            _sched_min = st.number_input(
-                "Minute", 0, 59,
-                value=st.session_state.get("sched_min", 0),
-                step=5,
-                key="sched_mn",
-            )
-        with _sh3:
-            _poll_interval_min = st.selectbox(
-                "Poll every",
-                [1, 2, 5, 10, 15, 30],
-                index=2,
-                key="sched_poll_interval",
-                format_func=lambda x: f"{x} min",
-            )
-        st.session_state["sched_hour"] = _sched_hour
-        st.session_state["sched_min"] = _sched_min
-
-        _next_run = _now_ist.replace(hour=_sched_hour, minute=_sched_min, second=0, microsecond=0)
-        if _next_run <= _now_ist:
-            _next_run = _next_run.replace(day=_now_ist.day) + __import__("datetime").timedelta(days=1)
-        st.caption(f"Next scheduled fetch: **{_next_run.strftime('%Y-%m-%d %H:%M IST')}** — polls every **{_poll_interval_min} min**")
-
-        if _sched_enabled:
-            # Poll timer — causes Streamlit to rerun every N minutes so schedule is checked
-            try:
-                from streamlit_autorefresh import st_autorefresh
-                st_autorefresh(interval=_poll_interval_min * 60 * 1000, key="sched_poll_ticker")
-            except ImportError:
-                st.warning("Install `streamlit-autorefresh` (`pip install streamlit-autorefresh`) to enable polling.")
-
-            # Check if we've already run today at/after the scheduled time
-            _today_str = _now_ist.strftime("%Y-%m-%d")
-            _last_sched_date = st.session_state.get("last_sched_run_date", "")
-            _past_time = (_now_ist.hour, _now_ist.minute) >= (_sched_hour, _sched_min)
-
-            if _past_time and _last_sched_date != _today_str:
-                st.session_state["last_sched_run_date"] = _today_str
-                st.info(f"⏰ Scheduled refresh triggered at {_now_ist.strftime('%H:%M IST')}…")
-                from modules.bigquery_client import fetch_live_clusters, fetch_hub_locations
-                _t0 = time.time()
-                with st.spinner("Scheduled fetch: live clusters…"):
-                    _cd, _e1 = fetch_live_clusters(bq_client, force_refresh=True)
-                    _hd, _e2 = fetch_hub_locations(bq_client, year, month)
-                if _e1:
-                    st.error(f"Scheduled fetch error (clusters): {_e1}")
-                    add_log(f"Scheduled fetch failed: {_e1}", "error")
-                elif _e2:
-                    st.error(f"Scheduled fetch error (hubs): {_e2}")
-                    add_log(f"Scheduled fetch (hubs) failed: {_e2}", "error")
-                else:
-                    st.session_state["live_cluster_df"] = _cd
-                    st.session_state["live_hub_df"] = _hd
-                    st.session_state["last_refresh_time"] = datetime.now()
-                    add_log(f"Scheduled refresh done: {len(_cd)} clusters in {time.time()-_t0:.1f}s", "success")
-                    st.success(f"✅ Scheduled refresh complete — {len(_cd)} clusters fetched.")
-                st.rerun()
-            elif _sched_enabled:
-                _mins_left = int((_next_run - _now_ist).total_seconds() / 60)
-                st.caption(f"⏳ Next refresh in **~{_mins_left} min**. Last auto-run: {_last_sched_date or 'never'}.")
-
-    if st.button("Refresh Live Clusters", type="primary", key="lc_fetch"):
-        from modules.bigquery_client import fetch_live_clusters, fetch_hub_locations
-        start = time.time()
-        add_log("Fetching live clusters", "info")
-        with st.status("Fetching live clusters from BigQuery...", expanded=True) as _lc_status:
-            st.write("Loading cluster assignments...")
-            cd, e1 = fetch_live_clusters(bq_client, force_refresh=True)
-            st.write("Loading hub locations...")
-            hd, e2 = fetch_hub_locations(bq_client, year, month)
-        el = time.time() - start
-        if e1:
-            _lc_status.update(label="❌ Cluster query failed", state="error", expanded=True)
-            st.markdown(f'<div class="sfx-err">Cluster query: {e1}</div>', unsafe_allow_html=True)
-        elif e2:
-            _lc_status.update(label="❌ Hub query failed", state="error", expanded=True)
-            st.markdown(f'<div class="sfx-err">Hub query: {e2}</div>', unsafe_allow_html=True)
-        else:
-            _lc_status.update(label=f"✅ {len(cd)} clusters, {len(hd)} hubs ({el:.1f}s)", state="complete", expanded=False)
-            st.session_state["live_cluster_df"] = cd
-            st.session_state["live_hub_df"] = hd
-            st.session_state["last_refresh_time"] = datetime.now()
-            add_log(f"Live clusters: {len(cd)} clusters, {len(hd)} hubs in {el:.1f}s", "success")
-            st.markdown(f'<div class="sfx-ok">✅ {len(cd)} clusters, {len(hd)} hubs ({el:.1f}s)</div>', unsafe_allow_html=True)
-            st.rerun()
-
-    # Show cache status
-    from modules.bigquery_client import _get_live_clusters_cache, LIVE_CLUSTERS_CACHE_FILE
-    if os.path.exists(LIVE_CLUSTERS_CACHE_FILE):
-        try:
-            with open(LIVE_CLUSTERS_CACHE_FILE, "r") as f:
-                cache_info = json.load(f)
-            st.caption(f"\U0001F4E6 Cache: {cache_info.get('record_count', '?')} records from {cache_info.get('fetched_time', '?')}")
-        except:
-            pass
-
-    # Auto-load from cache if no data in session
-    if st.session_state.get("live_cluster_df") is None:
-        cached = _get_live_clusters_cache()
-        if cached is not None:
-            st.session_state["live_cluster_df"] = cached
-            st.markdown('<div class="sfx-ok">\U0001F4E6 Loaded from daily cache</div>', unsafe_allow_html=True)
-
-    lcd = st.session_state.get("live_cluster_df")
-    lhd = st.session_state.get("live_hub_df")
-
-    if lcd is None:
-        st.markdown('<div class="sfx-warn">No live cluster data yet. Click "Refresh Live Clusters" above.</div>', unsafe_allow_html=True)
-        st.stop()
-
-    # ── KPI Row ──────────────────────────────────────────────────
-    st.markdown(f'''<div class="kpi-row">
-        <div class="kpi-card blue"><div class="kpi-label">Total Clusters</div><div class="kpi-value">{len(lcd):,}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Hubs</div><div class="kpi-value">{lcd["hub_name"].nunique()}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Pincodes</div><div class="kpi-value">{lcd["pincode"].nunique()}</div></div>
-        <div class="kpi-card green"><div class="kpi-label">Active</div><div class="kpi-value">{lcd["is_active"].sum() if "is_active" in lcd.columns else len(lcd)}</div></div>
-        <div class="kpi-card purple"><div class="kpi-label">Avg Surge</div><div class="kpi-value">₹{lcd["surge_amount"].mean():.1f}</div></div>
-    </div>''', unsafe_allow_html=True)
-
-    # ── Filters ───────────────────────────────────────────────────
-    st.markdown('<div class="sfx-header">Filters</div>', unsafe_allow_html=True)
-
-    # Hub type filter first — narrows hub_name list
-    if lhd is not None and "hub_category" in lhd.columns:
-        hub_cats = ["All Types"] + sorted(lhd["hub_category"].dropna().unique().tolist())
-        f_type = st.selectbox("Hub Type (LM / SSC)", hub_cats, key="lc_htype")
-    else:
-        f_type = "All Types"
-
-    # Hub-name choices restricted by type
-    all_hub_names = sorted(lcd["hub_name"].dropna().unique().tolist())
-    if f_type != "All Types" and lhd is not None and "hub_category" in lhd.columns:
-        type_hubs = lhd[lhd["hub_category"] == f_type]["name"].tolist()
-        hub_choices = [h for h in all_hub_names if h in type_hubs]
-    else:
-        hub_choices = all_hub_names
-
-    f_hubs = st.multiselect(
-        "Hub Name(s) — leave empty for all",
-        hub_choices,
-        key="lc_fh_multi",
-        help="Pick one or more hubs. Used by filter + export.",
-    )
-
-    fc1, fc2, fc3 = st.columns(3)
-    with fc1:
-        f_hid = st.text_input("Hub ID", key="lc_fid")
-    with fc2:
-        f_pc = st.text_input("Pincode", key="lc_fpc", placeholder="e.g. 400701")
-    with fc3:
-        min_rate, max_rate = st.slider("Surge Rate Range (₹)", 0, 14, (0, 14), key="lc_rate_slider")
-
-    # Apply filters
-    flt = lcd.copy()
-    if f_hubs:
-        flt = flt[flt["hub_name"].isin(f_hubs)]
-    elif f_type != "All Types" and lhd is not None and "hub_category" in lhd.columns:
-        type_hubs = lhd[lhd["hub_category"] == f_type]["name"].tolist()
-        flt = flt[flt["hub_name"].isin(type_hubs)]
-    if f_hid:
-        flt = flt[flt["hub_id"].astype(str).str.strip() == f_hid.strip()]
-    if f_pc:
-        pcs = [p.strip() for p in f_pc.split(",")]
-        flt = flt[flt["pincode"].astype(str).isin(pcs)]
-    flt = flt[(flt["surge_amount"] >= min_rate) & (flt["surge_amount"] <= max_rate)]
-
-    st.caption(f"Showing {len(flt):,} clusters after filters")
-
-    # ── 4 TABS — pulled from standalone app ──────────────────────
-    lc_tab1, lc_tab2, lc_tab3, lc_tab4 = st.tabs([
-        "Interactive Map",
-        "Cost Dashboard",
-        "Hub Comparison",
-        "Export & Edit"
-    ])
-
-    # ────────────────────────────────────────────────────────────
-    # TAB 1 — INTERACTIVE MAP
-    # ────────────────────────────────────────────────────────────
-    with lc_tab1:
-        st.markdown('<div class="sfx-header">Live Cluster Map</div>', unsafe_allow_html=True)
-
-        map_c1, map_c2, map_c3, map_c4, map_c5 = st.columns([2, 1, 1, 1, 1])
-        with map_c1:
-            st.info(f"Displaying **{len(flt):,} clusters** across **{flt['hub_name'].nunique()} hubs**")
-        with map_c2:
-            show_labels = st.checkbox("Show Rate Labels", value=True, key="lc_labels")
-        with map_c3:
-            show_hubs = st.checkbox("Show Hub Markers", value=True, key="lc_hubs")
-        with map_c4:
-            s5_color_mode = st.radio("Color by", ["Rate", "Pincode"], horizontal=True, key="lc_color_mode")
-        with map_c5:
-            edit_mode_s5 = st.toggle("Edit Mode", key="s5_edit_mode", value=False)
-            if not edit_mode_s5:
-                st.session_state.pop("_s5_drawings", None)
-
-        if edit_mode_s5:
-            st.info(
-                "**Edit Mode ON** — existing cluster polygons are now editable:  \n"
-                "• Click the **✏ Edit icon** (left toolbar) → drag any vertex to reshape  \n"
-                "• Click **✓ Save** on the toolbar → changes save automatically and map refreshes  \n"
-                "• Draw a new polygon with the polygon tool → fill in the metadata form that appears below  \n"
-                "• Click any polygon on the map to edit its surge rate or deactivate it"
-            )
-        if flt is None or len(flt) == 0:
-            st.markdown(
-                '<div class="sfx-warn">⚠️ No live cluster data loaded. '
-                'Go to the top of this page → click <b>Fetch Live Clusters from BigQuery</b>. '
-                'You need an active BigQuery connection (green badge in sidebar).</div>',
-                unsafe_allow_html=True,
-            )
-        st.caption("Use the layer control (top-right) to switch between Street / Satellite / Terrain views.")
-
-        try:
-            import streamlit.components.v1 as components
-            from modules.visualizer import (
-                create_live_cluster_map,
-                create_live_cluster_map_cached,
-                _df_hash,
-            )
-
-            # Single-hub filter value for cache key + function
-            _s5_hub = f_hubs[0] if len(f_hubs) == 1 else "All Hubs"
-
-            if edit_mode_s5:
-                # Edit mode — editable map with vertex dragging
-                import folium as _folium5
-                from modules.visualizer import create_editable_live_cluster_map
-                m5, edit_fg5 = create_editable_live_cluster_map(flt, lhd, hub_filter=_s5_hub)
-                # (edit mode always uses rate colors for clarity)
-                if m5 is None:
-                    st.warning("No cluster geometry to render. Make sure BQ data includes polygon boundaries.")
-                    st.stop()
-                from folium.plugins import Draw
-                Draw(
-                    export=False, position="topleft",
-                    feature_group=edit_fg5,
-                    show_geometry_on_click=False,
-                    draw_options={
-                        "polyline": False, "circle": False, "rectangle": False,
-                        "marker": False, "circlemarker": False,
-                        "polygon": {"shapeOptions": {"color": "#0B8A7A", "fillOpacity": 0.25}},
-                    },
-                    edit_options={"poly": {"allowIntersection": False}},
-                ).add_to(m5)
-                _fg5_js = edit_fg5.get_name()
-                m5.get_root().script.add_child(_folium5.Element(f"window.drawnItems = {_fg5_js};"))
-                from streamlit_folium import st_folium
-                map_out_step5 = st_folium(
-                    m5, width="100%", height=700,
-                    returned_objects=["all_drawings", "last_active_drawing"],
-                    key=f"s5_edit_map_{_s5_hub}",
-                )
-            else:
-                # Non-edit mode — cached HTML for fast render (same as Step 4 Hub Visualisation Map)
-                _lhd_hash = _df_hash(lhd) if lhd is not None else "none"
-                _s5_cm = 'pincode' if s5_color_mode == "Pincode" else 'rate'
-                html5 = create_live_cluster_map_cached(
-                    _df_hash(flt), _lhd_hash,
-                    _s5_hub, (min_rate, max_rate), f_type,
-                    show_labels, show_hubs,
-                    flt, lhd, _s5_cm,
-                )
-                if html5:
-                    components.html(html5, height=720, scrolling=False)
-                else:
-                    st.warning("No cluster geometry to render. Fetch live clusters first — BigQuery data must include a `boundary` (WKT) column.")
-                map_out_step5 = None
-
-            # ── Click handlers (edit mode only, st_folium required) ──────────
-            if edit_mode_s5 and map_out_step5 and map_out_step5.get("last_clicked"):
-                from shapely.geometry import Point as Pt5
-                from shapely.wkt import loads as wl5
-                click_pt5 = Pt5(map_out_step5["last_clicked"]["lng"], map_out_step5["last_clicked"]["lat"])
-                lcd_edit = st.session_state.get("live_cluster_df")
-                if lcd_edit is not None and "boundary" in lcd_edit.columns:
-                    for idx, row in lcd_edit.iterrows():
-                        try:
-                            if click_pt5.within(wl5(str(row.get("boundary", "")))):
-                                st.markdown(
-                                    f'<div class="sfx-card" style="border-left:4px solid #0B8A7A">'
-                                    f'<b>Editing: {row.get("cluster_code","")}</b> — Hub: {row.get("hub_name","")}<br>'
-                                    f'Rate: ₹{row.get("surge_amount",0)} | Pincode: {row.get("pincode","")} | '
-                                    f'Category: {row.get("cluster_category","")}</div>',
-                                    unsafe_allow_html=True,
-                                )
-                                with st.form(key=f"s5_map_edit_{idx}"):
-                                    new_surge = st.number_input(
-                                        "New Surge Rate (₹)",
-                                        value=float(row.get("surge_amount", 0)),
-                                        step=0.5, key=f"s5_surge_{idx}",
-                                    )
-                                    col_save5, col_del5 = st.columns(2)
-                                    with col_save5:
-                                        if st.form_submit_button("Save Rate Change", type="primary"):
-                                            lcd_edit.at[idx, "surge_amount"] = new_surge
-                                            st.session_state["live_cluster_df"] = lcd_edit
-                                            add_log(f"Updated {row['cluster_code']} surge → ₹{new_surge}", "success")
-                                            st.rerun()
-                                    with col_del5:
-                                        if st.form_submit_button("Deactivate Cluster"):
-                                            if "is_active" in lcd_edit.columns:
-                                                lcd_edit.at[idx, "is_active"] = False
-                                            st.session_state["live_cluster_df"] = lcd_edit
-                                            add_log(f"Deactivated {row['cluster_code']}", "warning")
-                                            st.rerun()
-                                break
-                        except Exception:
-                            continue
-
-            # ── Apply vertex edits + new drawn clusters ───────────────────────
-            # Store drawings in session state the moment they arrive.
-            if edit_mode_s5 and map_out_step5 and map_out_step5.get("all_drawings"):
-                st.session_state["_s5_drawings"] = map_out_step5["all_drawings"]
-
-            if edit_mode_s5 and st.session_state.get("_s5_drawings"):
-                from shapely.geometry import Polygon as _SP5
-                from shapely.wkt import loads as _wl5a
-                drawings5 = st.session_state["_s5_drawings"]
-                lcd_cur = st.session_state.get("live_cluster_df")
-                _wc5 = "boundary" if (lcd_cur is not None and "boundary" in lcd_cur.columns) else "polygon wkt"
-
-                # Compute original centroids once
-                _orig5 = []
-                if lcd_cur is not None and _wc5 in lcd_cur.columns:
-                    for _i5, _r5 in lcd_cur.iterrows():
-                        try:
-                            _g5 = _wl5a(str(_r5.get(_wc5, "")))
-                            _orig5.append((_i5, _g5.centroid.x, _g5.centroid.y))
-                        except Exception:
-                            continue
-
-                # AUTO-SAVE reshapes immediately; queue new draws for form below
-                _reshapes5, _new_draws5 = [], []
-                for _drw5 in drawings5:
-                    if _drw5.get("geometry", {}).get("type") != "Polygon":
-                        continue
-                    _coords5 = _drw5["geometry"].get("coordinates", [[]])[0]
-                    if len(_coords5) < 4:
-                        continue
-                    _np5 = _SP5([(_c[0], _c[1]) for _c in _coords5])
-                    _ncx5, _ncy5 = _np5.centroid.x, _np5.centroid.y
-                    _best5, _bd5 = None, float("inf")
-                    for (_oi5, _ox5, _oy5) in _orig5:
-                        _d5 = ((_ox5 - _ncx5)**2 + (_oy5 - _ncy5)**2)**0.5
-                        if _d5 < _bd5 and _d5 < 0.05:
-                            _bd5 = _d5; _best5 = _oi5
-                    if _best5 is not None:
-                        _reshapes5.append((_best5, _drw5, _coords5))
-                    else:
-                        _new_draws5.append(_drw5)
-
-                if _reshapes5:
-                    _lcd5 = lcd_cur.copy()
-                    st.session_state.setdefault("_s5_undo_stack", []).append(_lcd5.copy())
-                    for (_idx5, _drw5, _co5) in _reshapes5:
-                        _nwkt5 = "POLYGON((" + ", ".join(f"{_c[0]} {_c[1]}" for _c in _co5) + "))"
-                        _lcd5.at[_idx5, _wc5] = _nwkt5
-                    st.session_state["live_cluster_df"] = _lcd5
-                    st.session_state["_s5_drawings"] = []
-                    add_log(f"Auto-saved {len(_reshapes5)} cluster reshape(s)", "success")
-                    st.rerun()
-
-                if st.session_state.get("_s5_undo_stack"):
-                    if st.button("↶ Undo Last Edit", key="s5_undo_btn"):
-                        st.session_state["live_cluster_df"] = st.session_state["_s5_undo_stack"].pop()
-                        add_log("Undid last live cluster edit", "warning")
-                        st.rerun()
-
-                # Show form only for truly new drawn polygons (not reshapes)
-                for _i_new5, drawing in enumerate(_new_draws5):
-                    st.markdown('<div class="sfx-header">Name Your Drawn Cluster</div>', unsafe_allow_html=True)
-                    with st.form(key=f"s5_drawn_poly_form_{_i_new5}"):
-                        dc1, dc2 = st.columns(2)
-                        with dc1:
-                            new_code = st.text_input("Cluster Code", key=f"s5_drawn_code_{_i_new5}")
-                            new_hub  = st.text_input("Hub Name",     key=f"s5_drawn_hub_{_i_new5}")
-                            new_pin  = st.text_input("Pincode",      key=f"s5_drawn_pin_{_i_new5}")
-                        with dc2:
-                            new_rate = st.number_input("Surge Rate (₹)", min_value=0.0, step=0.5, key=f"s5_drawn_rate_{_i_new5}")
-                            new_cat  = st.text_input("Category (e.g. Rs.4)", key=f"s5_drawn_cat_{_i_new5}")
-                            new_desc = st.text_input("Description",  key=f"s5_drawn_desc_{_i_new5}")
-                        if st.form_submit_button("Save New Cluster", type="primary"):
-                            coords = drawing["geometry"]["coordinates"][0]
-                            wkt_str = "POLYGON((" + ", ".join(f"{c[0]} {c[1]}" for c in coords) + "))"
-                            new_row = {
-                                "cluster_code": new_code, "hub_name": new_hub,
-                                "pincode": new_pin, "surge_amount": new_rate,
-                                "cluster_category": new_cat, "description": new_desc,
-                                "boundary": wkt_str, "is_active": True,
-                                "hub_id": "", "id": "",
-                            }
-                            lcd_draw = st.session_state.get("live_cluster_df")
-                            st.session_state["live_cluster_df"] = (
-                                pd.concat([lcd_draw, pd.DataFrame([new_row])], ignore_index=True)
-                                if lcd_draw is not None else pd.DataFrame([new_row])
-                            )
-                            add_log(f"Created new cluster: {new_code} at ₹{new_rate}", "success")
-                            st.rerun()
-
-        except Exception as e:
-            import traceback
-            st.error(f"Map render error: {str(e)}")
-            st.code(traceback.format_exc())
-
-        with st.expander("Map Legend", expanded=False):
-            st.markdown("""
-            | Color | Surge Rate | Description |
-            |-------|-----------|-------------|
-            | 🔘 Gray | ₹0 | Base rate — no surcharge |
-            | 🔵 Light Blue | ₹1–₹3 | Low surcharge zone |
-            | 🔷 Dark Blue | ₹4–₹6 | Medium surcharge zone |
-            | 🟠 Orange | ₹7–₹10 | High surcharge zone |
-            | 🔴 Red | ₹11+ | Very high surcharge zone |
-
-            - **Red triangles** = Hub locations
-            - **Click any polygon** to view cluster details
-            - **Rate label** shows ₹ surcharge inside each zone
-            """)
-
-    # ────────────────────────────────────────────────────────────
-    # TAB 2 — COST DASHBOARD
-    # ────────────────────────────────────────────────────────────
-    with lc_tab2:
-        st.markdown('<div class="sfx-header">Cost Analytics Dashboard</div>', unsafe_allow_html=True)
-
-        try:
-            from modules.cost_analyzer import CostAnalyzer
-            from modules.live_cluster_utils import format_currency, format_number
-
-            analyzer = CostAnalyzer()
-            shipment_data = analyzer.generate_mock_shipments(flt)
-            metrics = analyzer.calculate_metrics(flt, shipment_data)
-
-            # Top KPI row
-            st.markdown(f'''<div class="kpi-row">
-                <div class="kpi-card blue"><div class="kpi-label">Surge Revenue</div><div class="kpi-value">{format_currency(metrics["total_revenue"])}</div></div>
-                <div class="kpi-card purple"><div class="kpi-label">Shipments</div><div class="kpi-value">{format_number(metrics["total_shipments"])}</div></div>
-                <div class="kpi-card"><div class="kpi-label">Avg Rate</div><div class="kpi-value">₹{metrics["avg_cluster_rate"]:.2f}</div></div>
-                <div class="kpi-card green"><div class="kpi-label">Active Clusters</div><div class="kpi-value">{format_number(metrics["active_clusters"])}</div></div>
-            </div>''', unsafe_allow_html=True)
-
-            st.markdown("---")
-            dash_c1, dash_c2 = st.columns(2)
-
-            with dash_c1:
-                st.markdown('<div class="sfx-header">Revenue by Hub (Top 10)</div>', unsafe_allow_html=True)
-                hub_revenue = shipment_data.groupby("hub_name").agg(
-                    {"revenue": "sum", "shipments": "sum"}
-                ).sort_values("revenue", ascending=False).head(10)
-                st.dataframe(
-                    hub_revenue.style.format({"revenue": lambda x: f"₹{x:,.0f}", "shipments": lambda x: f"{x:,.0f}"}),
-                    use_container_width=True, height=320
-                )
-
-            with dash_c2:
-                st.markdown('<div class="sfx-header">Revenue by Rate Category</div>', unsafe_allow_html=True)
-                cat_revenue = shipment_data.groupby("rate_category").agg(
-                    {"revenue": "sum", "shipments": "sum"}
-                ).sort_values("revenue", ascending=False)
-                st.dataframe(
-                    cat_revenue.style.format({"revenue": lambda x: f"₹{x:,.0f}", "shipments": lambda x: f"{x:,.0f}"}),
-                    use_container_width=True, height=320
-                )
-
-            st.markdown("---")
-            st.markdown('<div class="sfx-header">Cost Optimization Recommendations</div>', unsafe_allow_html=True)
-
-            suggestions = analyzer.generate_suggestions(flt, shipment_data)
-            if suggestions:
-                for i, s in enumerate(suggestions[:5], 1):
-                    st.markdown(f'''
-                    <div style="background:#FEFCE8;border-left:4px solid #F5C800;padding:14px 18px;
-                    margin:10px 0;border-radius:0 8px 8px 0;">
-                        <div style="font-weight:700;color:var(--text-color);font-family:'Work Sans',sans-serif">
-                            {i}. {s["action"]}
-                        </div>
-                        <div style="font-size:12px;color:var(--sfx-muted);margin:4px 0">
-                            Clusters: {s["clusters"]}
-                        </div>
-                        <div style="color:#0B8A7A;font-weight:600;margin:4px 0">
-                            Potential Saving: ₹{s["potential_saving"]:,.0f}/month
-                        </div>
-                        <div style="color:var(--text-color);font-size:13px">{s["reasoning"]}</div>
-                    </div>
-                    ''', unsafe_allow_html=True)
-            else:
-                st.info("No optimization suggestions generated for the current filter set.")
-
-            # AI-powered live cluster analysis
-            st.markdown("---")
-            st.markdown('<div class="sfx-header">AI Live Cluster Analysis</div>', unsafe_allow_html=True)
-            api_key = st.session_state.get("groq_api_key")
-            if st.button("Run AI Analysis on Live Clusters", type="primary", key="lc_ai_analysis"):
-                from modules.ai_agent import run_live_cluster_analysis
-                with st.spinner("AI analyzing live clusters..."):
-                    ai_report = run_live_cluster_analysis(flt, st.session_state.get("final_result_df"), api_key)
-                    st.session_state["lc_ai_report"] = ai_report
-                    add_log("Live cluster AI analysis complete", "success")
-            if st.session_state.get("lc_ai_report"):
-                st.markdown(f'<div class="sfx-card" style="border-left:4px solid #0B8A7A">{st.session_state["lc_ai_report"]}</div>', unsafe_allow_html=True)
-
-        except Exception as e:
-            import traceback
-            st.error(f"Dashboard error: {str(e)}")
-            st.code(traceback.format_exc())
-
-    # ────────────────────────────────────────────────────────────
-    # TAB 3 — HUB COMPARISON
-    # ────────────────────────────────────────────────────────────
-    with lc_tab3:
-        st.markdown('<div class="sfx-header">Hub Performance Comparison</div>', unsafe_allow_html=True)
-
-        try:
-            from modules.cost_analyzer import CostAnalyzer
-            from modules.live_cluster_utils import format_currency, format_number
-
-            analyzer = CostAnalyzer()
-            hub_list = sorted(lcd["hub_name"].dropna().unique().tolist())
-
-            if len(hub_list) < 2:
-                st.info("Need at least 2 hubs in the data to compare.")
-            else:
-                comp_c1, comp_c2 = st.columns(2)
-                with comp_c1:
-                    hub_a = st.selectbox("Hub A", hub_list, key="lc_hub_a")
-                with comp_c2:
-                    hub_b = st.selectbox("Hub B", hub_list, index=min(1, len(hub_list)-1), key="lc_hub_b")
-
-                df_base = lcd.copy()
-                hub_a_data = df_base[df_base["hub_name"] == hub_a]
-                hub_b_data = df_base[df_base["hub_name"] == hub_b]
-
-                ship_a = analyzer.generate_mock_shipments(hub_a_data)
-                ship_b = analyzer.generate_mock_shipments(hub_b_data)
-                metrics_a = analyzer.calculate_metrics(hub_a_data, ship_a)
-                metrics_b = analyzer.calculate_metrics(hub_b_data, ship_b)
-
-                comparison_data = {
-                    "Metric": [
-                        "Total Surge Revenue",
-                        "Total Shipments",
-                        "Avg Cluster Rate",
-                        "Active Clusters",
-                        "Revenue per Shipment",
-                        "Total Clusters"
-                    ],
-                    hub_a: [
-                        format_currency(metrics_a["total_revenue"]),
-                        format_number(metrics_a["total_shipments"]),
-                        f"₹{metrics_a['avg_cluster_rate']:.2f}",
-                        format_number(metrics_a["active_clusters"]),
-                        format_currency(metrics_a["total_revenue"] / max(metrics_a["total_shipments"], 1)),
-                        format_number(len(hub_a_data))
-                    ],
-                    hub_b: [
-                        format_currency(metrics_b["total_revenue"]),
-                        format_number(metrics_b["total_shipments"]),
-                        f"₹{metrics_b['avg_cluster_rate']:.2f}",
-                        format_number(metrics_b["active_clusters"]),
-                        format_currency(metrics_b["total_revenue"] / max(metrics_b["total_shipments"], 1)),
-                        format_number(len(hub_b_data))
-                    ],
-                    "Difference": [
-                        f"{((metrics_a['total_revenue'] - metrics_b['total_revenue']) / max(metrics_b['total_revenue'], 1) * 100):+.1f}%",
-                        f"{((metrics_a['total_shipments'] - metrics_b['total_shipments']) / max(metrics_b['total_shipments'], 1) * 100):+.1f}%",
-                        f"{((metrics_a['avg_cluster_rate'] - metrics_b['avg_cluster_rate']) / max(metrics_b['avg_cluster_rate'], 0.01) * 100):+.1f}%",
-                        f"{(metrics_a['active_clusters'] - metrics_b['active_clusters']):+.0f}",
-                        f"{(((metrics_a['total_revenue'] / max(metrics_a['total_shipments'], 1)) - (metrics_b['total_revenue'] / max(metrics_b['total_shipments'], 1))) / max((metrics_b['total_revenue'] / max(metrics_b['total_shipments'], 1)), 1) * 100):+.1f}%",
-                        f"{(len(hub_a_data) - len(hub_b_data)):+.0f}"
-                    ]
-                }
-
-                def color_diff(val):
-                    if isinstance(val, str) and "%" in val:
-                        try:
-                            v = float(val.replace("%", "").replace("+", ""))
-                            return "color: #0B8A7A; font-weight:600" if v > 0 else ("color: #EF4444; font-weight:600" if v < 0 else "")
-                        except Exception:
-                            return ""
-                    return ""
-
-                comp_df = pd.DataFrame(comparison_data)
-                st.dataframe(comp_df.style.applymap(color_diff, subset=["Difference"]),
-                             use_container_width=True, hide_index=True)
-
-                # P&L impact note from main app data
-                rdf = st.session_state.get("final_result_df")
-                if rdf is not None and "hub" in rdf.columns and "P & L" in rdf.columns:
-                    st.markdown("---")
-                    st.markdown('<div class="sfx-header">P&L from AWB Analysis</div>', unsafe_allow_html=True)
-                    for hub_name in [hub_a, hub_b]:
-                        hub_rdf = rdf[rdf["hub"] == hub_name]
-                        if len(hub_rdf) > 0:
-                            st.markdown(f'''<div class="sfx-card">
-                                <b>{hub_name}</b> —
-                                Burn: <span style="color:#EF4444">₹{hub_rdf["Burning"].sum():,.0f}</span> |
-                                Saving: <span style="color:#0B8A7A">₹{hub_rdf["Saving"].sum():,.0f}</span> |
-                                Net P&L: <span style="color:{"#0B8A7A" if hub_rdf["P & L"].sum() > 0 else "#EF4444"}">
-                                ₹{hub_rdf["P & L"].sum():,.0f}</span>
-                            </div>''', unsafe_allow_html=True)
-
-        except Exception as e:
-            import traceback
-            st.error(f"Comparison error: {str(e)}")
-            st.code(traceback.format_exc())
-
-    # ────────────────────────────────────────────────────────────
-    # TAB 4 — EXPORT & EDIT
-    # ────────────────────────────────────────────────────────────
-    with lc_tab4:
-        st.markdown('<div class="sfx-header">Export & Edit Live Clusters</div>', unsafe_allow_html=True)
-
-        # ── Multi-hub polygon export ─────────────────────────────────
-        st.markdown("#### Export Hub Polygons")
-        all_hub_list = sorted(flt["hub_name"].dropna().unique().tolist())
-        default_hubs = f_hubs if f_hubs else all_hub_list
-        exp_hubs = st.multiselect(
-            "Select hub(s) to export",
-            all_hub_list,
-            default=default_hubs,
-            key="lc_exp_hubs",
-            help="Pick one or more hubs whose polygons you want to download.",
-        )
-        exp_fmt_poly = st.radio(
-            "Polygon Export Format",
-            ["CSV", "GeoJSON", "KML"],
-            horizontal=True,
-            key="lc_exp_poly_fmt",
-        )
-        if st.button("Generate Polygon Export", type="primary", key="lc_exp_poly_btn"):
-            if not exp_hubs:
-                st.warning("Pick at least one hub.")
-            else:
-                sub = flt[flt["hub_name"].isin(exp_hubs)].copy()
-                wkt_col = "boundary" if "boundary" in sub.columns else ("Polygon WKT" if "Polygon WKT" in sub.columns else None)
-                if wkt_col is None:
-                    st.error("No polygon geometry column (boundary / Polygon WKT) found in the data.")
-                else:
-                    stamp = datetime.now().strftime("%Y%m%d_%H%M")
-                    hubs_slug = "_".join(h.replace(" ", "") for h in exp_hubs[:3])
-                    if len(exp_hubs) > 3:
-                        hubs_slug += f"_+{len(exp_hubs)-3}more"
-                    base_name = f"hub_polygons_{hubs_slug}_{stamp}"
-
-                    if exp_fmt_poly == "CSV":
-                        csv_bytes = sub.to_csv(index=False).encode("utf-8-sig")
-                        st.download_button("⬇ Download CSV", csv_bytes, f"{base_name}.csv", "text/csv", key="dl_poly_csv")
-                    elif exp_fmt_poly == "GeoJSON":
-                        try:
-                            from shapely.wkt import loads as _wkt_loads
-                            from shapely.geometry import mapping as _shape_mapping
-                            features = []
-                            for _, r in sub.iterrows():
-                                try:
-                                    geom = _wkt_loads(str(r[wkt_col]))
-                                except Exception:
-                                    continue
-                                props = {k: (None if pd.isna(v) else v) for k, v in r.items() if k != wkt_col}
-                                for k, v in list(props.items()):
-                                    if hasattr(v, "isoformat"):
-                                        props[k] = v.isoformat()
-                                features.append({"type": "Feature", "geometry": _shape_mapping(geom), "properties": props})
-                            fc = {"type": "FeatureCollection", "features": features}
-                            st.download_button("⬇ Download GeoJSON", json.dumps(fc, default=str).encode("utf-8"),
-                                               f"{base_name}.geojson", "application/geo+json", key="dl_poly_geojson")
-                        except Exception as e:
-                            st.error(f"GeoJSON export error: {e}")
-                    elif exp_fmt_poly == "KML":
-                        try:
-                            from shapely.wkt import loads as _wkt_loads
-                            def _kml_coords(poly):
-                                parts = []
-                                ext = " ".join(f"{x},{y},0" for x, y in poly.exterior.coords)
-                                inner = "".join(
-                                    f"<innerBoundaryIs><LinearRing><coordinates>"
-                                    f"{' '.join(f'{x},{y},0' for x, y in ring.coords)}"
-                                    f"</coordinates></LinearRing></innerBoundaryIs>"
-                                    for ring in poly.interiors
-                                )
-                                parts.append(
-                                    f"<Polygon><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>{inner}</Polygon>"
-                                )
-                                return "".join(parts)
-
-                            def _xml_escape(s):
-                                return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-                                        .replace(">", "&gt;").replace('"', "&quot;"))
-
-                            kml_placemarks = []
-                            for _, r in sub.iterrows():
-                                try:
-                                    g = _wkt_loads(str(r[wkt_col]))
-                                except Exception:
-                                    continue
-                                geom_list = list(g.geoms) if g.geom_type == "MultiPolygon" else [g]
-                                for pg in geom_list:
-                                    geom_kml = _kml_coords(pg)
-                                    name_val = _xml_escape(r.get("cluster_code", r.get("hub_name", "")))
-                                    desc_fields = []
-                                    for k in ["hub_name", "cluster_code", "pincode", "cluster_category", "surge_amount"]:
-                                        if k in r and not pd.isna(r[k]):
-                                            desc_fields.append(f"{k}: {_xml_escape(str(r[k]))}")
-                                    # Single escape only — no HTML tags to avoid double-escaping
-                                    desc = " | ".join(desc_fields)
-                                    kml_placemarks.append(
-                                        f"<Placemark><name>{name_val}</name>"
-                                        f"<description>{desc}</description>{geom_kml}</Placemark>"
-                                    )
-                            kml_doc = (
-                                '<?xml version="1.0" encoding="UTF-8"?>'
-                                '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
-                                f"<name>{_xml_escape(base_name)}</name>"
-                                + "".join(kml_placemarks)
-                                + "</Document></kml>"
-                            )
-                            st.download_button("⬇ Download KML", kml_doc.encode("utf-8"),
-                                               f"{base_name}.kml", "application/vnd.google-earth.kml+xml", key="dl_poly_kml")
-                        except Exception as e:
-                            st.error(f"KML export error: {e}")
-
-        st.markdown("---")
-
-        exp_c1, exp_c2 = st.columns(2)
-
-        with exp_c1:
-            st.markdown("#### Other Exports")
-            export_fmt = st.radio("Format", ["CSV — Cluster Data", "CSV — Hub Summary", "HTML — Interactive Map"], key="lc_exp_fmt")
-
-            if st.button("Generate Export", type="primary", key="lc_exp_btn"):
-                if "Cluster Data" in export_fmt:
-                    csv_out = flt.drop(columns=["boundary"], errors="ignore").to_csv(index=False)
-                    st.download_button("Download Cluster Data CSV", csv_out,
-                                       f"live_clusters_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv", key="dl_lc_csv")
-                elif "Hub Summary" in export_fmt:
-                    hub_sum = flt.groupby("hub_name").agg(
-                        cluster_count=("cluster_code", "count"),
-                        avg_surge=("surge_amount", "mean"),
-                        unique_pincodes=("pincode", "nunique")
-                    ).reset_index()
-                    hub_sum.columns = ["Hub Name", "Cluster Count", "Avg Surge Rate", "Unique Pincodes"]
-                    st.download_button("Download Hub Summary CSV", hub_sum.to_csv(index=False),
-                                       f"hub_summary_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv", key="dl_hs_csv")
-                elif "HTML" in export_fmt:
-                    try:
-                        from modules.map_renderer import MapRenderer
-                        renderer = MapRenderer()
-                        map_obj = renderer.create_cluster_map(flt, lhd if lhd is not None else pd.DataFrame(),
-                                                              show_rate_labels=True, show_hub_markers=True)
-                        st.download_button("Download Interactive Map HTML", map_obj._repr_html_(),
-                                           f"live_cluster_map_{datetime.now().strftime('%Y%m%d')}.html",
-                                           "text/html", key="dl_html")
-                    except Exception as e:
-                        st.error(f"HTML export error: {str(e)}")
-
-        with exp_c2:
-            st.markdown("#### Inline Edit")
-            edit_mode = st.toggle("Enable Editing", key="lc_edit_mode")
-            if edit_mode:
-                st.markdown('<div class="sfx-warn">Changes are in-memory only — not pushed to BigQuery.</div>', unsafe_allow_html=True)
-                edit_cols = [c for c in ["id", "hub_name", "cluster_code", "description",
-                                          "pincode", "cluster_category", "surge_amount", "is_active"] if c in flt.columns]
-                edited_lcd = st.data_editor(flt[edit_cols], use_container_width=True,
-                                             height=400, num_rows="dynamic", key="lc_editor")
-                save_c1, save_c2 = st.columns(2)
-                with save_c1:
-                    if st.button("Save Changes", type="primary", key="lc_save"):
-                        full_lcd = st.session_state["live_cluster_df"]
-                        ids_edited = edited_lcd["id"].tolist() if "id" in edited_lcd.columns else []
-                        full_lcd = full_lcd[~full_lcd["id"].isin(ids_edited)]
-                        st.session_state["live_cluster_df"] = pd.concat([full_lcd, edited_lcd], ignore_index=True)
-                        add_log("Live cluster edits saved to session", "success")
-                        st.markdown('<div class="sfx-ok">✅ Saved to session.</div>', unsafe_allow_html=True)
-                with save_c2:
-                    rows_to_delete = st.multiselect("Delete by cluster_code",
-                                                    flt["cluster_code"].tolist() if "cluster_code" in flt.columns else [],
-                                                    key="lc_del")
-                    if st.button("Delete Selected", key="lc_del_btn") and rows_to_delete:
-                        full_lcd = st.session_state["live_cluster_df"]
-                        st.session_state["live_cluster_df"] = full_lcd[~full_lcd["cluster_code"].isin(rows_to_delete)]
-                        add_log(f"Deleted: {rows_to_delete}", "warning")
-                        st.rerun()
-            else:
-                show_df_download(flt.head(200), "live_cl", "Live Clusters Data")
-
-        # Burn Impact panel — pulled from AWB results
-        rdf = st.session_state.get("final_result_df")
-        if rdf is not None and "Burning" in rdf.columns:
-            st.markdown("---")
-            st.markdown('<div class="sfx-header">Burn Impact for Filtered Clusters</div>', unsafe_allow_html=True)
-            filtered_pcs = flt["pincode"].astype(str).tolist()
-            burn_rdf = rdf[rdf["pincode"].astype(str).isin(filtered_pcs)]
-            if len(burn_rdf) > 0:
-                st.markdown(f'''<div class="kpi-row">
-                    <div class="kpi-card red"><div class="kpi-label">Total Burn</div><div class="kpi-value">₹{burn_rdf["Burning"].sum():,.0f}</div></div>
-                    <div class="kpi-card green"><div class="kpi-label">Total Saving</div><div class="kpi-value">₹{burn_rdf["Saving"].sum():,.0f}</div></div>
-                    <div class="kpi-card blue"><div class="kpi-label">AWBs</div><div class="kpi-value">{len(burn_rdf):,}</div></div>
-                    <div class="kpi-card purple"><div class="kpi-label">Net P&L</div><div class="kpi-value">₹{burn_rdf["P & L"].sum():,.0f}</div></div>
-                </div>''', unsafe_allow_html=True)
-            else:
-                st.info("No AWB P&L data for filtered pincodes. Run AWB analysis (Step 4) first.")
-
-# ═══════════════════════════════════════════════════════
-# STEP 6 — FINANCIAL INTELLIGENCE
-# ═══════════════════════════════════════════════════════
-elif nav.startswith("6"):
-    st.markdown('<div class="sfx-header">Step 6 — Financial Intelligence</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sfx-header">Step 5 — Financial Intelligence</div>', unsafe_allow_html=True)
     rdf = st.session_state.get("final_result_df")
     if rdf is None:
-        st.markdown('<div class="sfx-warn">Complete AWB pipeline first (Step 4), or load data via Step 1.</div>', unsafe_allow_html=True); st.stop()
+        render_step_guard(["AWB P&L results"], "Run Step 4 → Assign + Financials, or load saved results via Step 1.")
     if "Pin_Pay" not in rdf.columns:
         try:
             from modules.cluster_assignor import calculate_financials
@@ -3257,9 +2378,9 @@ elif nav.startswith("6"):
         st.error(str(e)); import traceback; st.code(traceback.format_exc())
 
 # ═══════════════════════════════════════════════════════
-# STEP 7 — AI AGENT (Full App-Aware Assistant)
+# STEP 6 — AI AGENT (Full App-Aware Assistant)
 # ═══════════════════════════════════════════════════════
-elif nav.startswith("7"):
+elif nav.startswith("6"):
     st.markdown('<div class="sfx-header">AI Agent — Geo Intelligence Assistant</div>', unsafe_allow_html=True)
 
     api_key = st.session_state.get("groq_api_key")

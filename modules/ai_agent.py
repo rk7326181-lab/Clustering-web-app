@@ -248,14 +248,13 @@ Typical: C1=₹0, C2=₹1, C3=₹2 ... C9=₹8, C10+=₹10–₹14 for extended 
 7. Use OSRM road distances instead of haversine for pincodes with major geographic barriers (rivers, highways)
 8. Audit pincodes where AWBs consistently land outside polygons (point-in-polygon miss = wrong payout)
 
-## APP PIPELINE (8 Steps)
+## APP PIPELINE (6 Steps)
 1. **Data Ingestion** — Upload: Clustering CSV (Pincode, Hub_Name, Hub_lat, Hub_long), Pincodes CSV (volumetric lat/lon), GeoJSON boundaries
 2. **P-Mapping** — OSRM/haversine distance → payout slab assignment (₹0–₹8 or Nil)
 3. **Polygon Gen** — Concentric ring polygons around hubs, clipped to pincode boundaries → Cluster_Code + Category
 4. **AWB Analysis** — 60-day shipment data from BigQuery, point-in-polygon cluster assignment, P&L calculation
-5. **Live Clusters** — Production payout clusters from BigQuery: map view, cost dashboard, hub comparison, export
-6. **Financial Intelligence** — Pivot table (Hub × Pincode), P&L comparison, AI burn analysis
-7. **AI Agent** — You are here
+5. **Financial Intelligence** — Pivot table (Hub × Pincode), P&L comparison, AI burn analysis
+6. **AI Agent** — You are here
 
 ## YOUR CAPABILITIES
 - Guide users through the pipeline step by step
@@ -263,7 +262,6 @@ Typical: C1=₹0, C2=₹1, C3=₹2 ... C9=₹8, C10+=₹10–₹14 for extended 
 - Recommend cluster adjustments with ₹ impact estimates
 - Explain why AWBs are in wrong clusters
 - Interpret P&L reports and pivot tables
-- Analyze hub comparison data from the Live Clusters tab
 - Suggest polygon boundary improvements
 - Explain any feature, setting, or error in the app
 
@@ -478,71 +476,6 @@ def app_agent_chat(question, session_state, chat_history, api_key):
         return f"⚠️ {_friendly_error(e)}\n\n" + _app_agent_fallback(question, session_state)
 
 
-def run_live_cluster_analysis(live_cluster_df, awb_df, api_key):
-    """Analyze live cluster data with AI recommendations."""
-    if live_cluster_df is None or live_cluster_df.empty:
-        return "⚠️ No live cluster data. Refresh from BigQuery in Step 5 first."
-
-    hub_summary = live_cluster_df.groupby("hub_name").agg(
-        cluster_count=("cluster_code", "count"),
-        avg_surge=("surge_amount", "mean"),
-        pincodes=("pincode", "nunique"),
-    ).reset_index().sort_values("avg_surge", ascending=False)
-
-    summary_lines = [
-        "## LIVE CLUSTER ANALYSIS",
-        f"Total live clusters: {len(live_cluster_df):,}",
-        f"Hubs: {live_cluster_df['hub_name'].nunique()}",
-        f"Avg surge rate: ₹{live_cluster_df['surge_amount'].mean():.2f}",
-        "\n### Hub Summary (sorted by avg surge):"
-    ]
-    for _, row in hub_summary.iterrows():
-        summary_lines.append(
-            f"- {row['hub_name']}: {row['cluster_count']} clusters, "
-            f"avg surge ₹{row['avg_surge']:.1f}, {row['pincodes']} pincodes"
-        )
-
-    if awb_df is not None and "Burning" in awb_df.columns:
-        burn_by_hub = awb_df.groupby("hub").agg(
-            burn=("Burning", "sum"), saving=("Saving", "sum"), awbs=("awb_number", "count")
-        ).reset_index().sort_values("burn", ascending=False)
-        summary_lines.append("\n### AWB Burn by Hub:")
-        for _, row in burn_by_hub.iterrows():
-            net = row["saving"] - row["burn"]
-            summary_lines.append(
-                f"- {row['hub']}: Burn=₹{row['burn']:,.0f}, Saving=₹{row['saving']:,.0f}, "
-                f"Net=₹{net:,.0f}, AWBs={row['awbs']:,}"
-            )
-
-    context = "\n".join(summary_lines)
-    api_key = _resolve_api_key(api_key)
-    if not HAS_GROQ or not api_key:
-        return context + "\n\n*Add Groq API key to get AI recommendations.*"
-
-    prompt = f"""Analyze the following Shadowfax live cluster and AWB data.
-Provide:
-1. Top 3 hubs where increasing the AWB rate slightly would maximize revenue without losing clients
-2. Top 3 hubs where the current surge rate is too high and is burning money — with specific rate reduction suggestions
-3. Which cluster categories (C1–C20) appear most in high-burn scenarios and why
-4. Specific polygon boundary adjustments that would reduce burn
-5. Estimated monthly ₹ impact of each suggestion
-
-{context}
-
-Be specific, use ₹ amounts, reference hub names directly."""
-
-    try:
-        return _groq_chat(
-            messages=[
-                {"role": "system", "content": APP_AGENT_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            api_key=api_key, temperature=0.2, max_tokens=2000,
-        )
-    except Exception as e:
-        return f"⚠️ {_friendly_error(e)}\n\n{context}"
-
-
 def _app_agent_fallback(question, session_state):
     """Rule-based fallback when Groq is unavailable."""
     q = question.lower()
@@ -580,9 +513,8 @@ def _app_agent_fallback(question, session_state):
 2. **P Mapping** — Calculate hub-to-pincode distances and payout slabs
 3. **Polygon Gen** — Create distance-ring cluster polygons
 4. **AWB Analysis** — Fetch shipment data and assign to clusters
-5. **Live Clusters** — Compare with production clusters
-6. **Financial Intelligence** — View Hub × Pincode P&L report and AI burn analysis
-7. **AI Agent** — Ask questions, get recommendations, diagnose issues
+5. **Financial Intelligence** — View Hub × Pincode P&L report and AI burn analysis
+6. **AI Agent** — Ask questions, get recommendations, diagnose issues
 
 For AI analysis, enter your free Groq API key from console.groq.com."""
 

@@ -27,14 +27,12 @@ except ImportError:
 
 PROJECT_ID = "bi-team-400508"
 
-# Daily cache file for live clusters (avoids redundant BigQuery calls)
+# Cache dir helper (used by AWB fetch + OAuth)
 import tempfile as _tempfile
 def _get_cache_dir():
     if os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true":
         return _tempfile.gettempdir()
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs")
-
-LIVE_CLUSTERS_CACHE_FILE = os.path.join(_get_cache_dir(), "live_clusters_cache.json")
 
 # Google OAuth scopes for BigQuery
 OAUTH_SCOPES = [
@@ -457,113 +455,6 @@ def fetch_awb_data(client, cluster_df):
         return None, f"BigQuery API Error: {e}"
     except Exception as e:
         return None, f"Unexpected Error: {e}"
-
-
-# ════════════════════════════════════════════════════
-# LIVE CLUSTER QUERIES (same client reused)
-# ════════════════════════════════════════════════════
-
-def _get_live_clusters_cache():
-    """Load cached live clusters if cache exists and was fetched today."""
-    try:
-        if not os.path.exists(LIVE_CLUSTERS_CACHE_FILE):
-            return None
-        with open(LIVE_CLUSTERS_CACHE_FILE, "r") as f:
-            cache = json.load(f)
-        fetched_date = cache.get("fetched_date", "")
-        today = datetime.now().strftime("%Y-%m-%d")
-        if fetched_date != today:
-            return None  # Cache is stale
-        df = pd.DataFrame(cache["data"])
-        return df
-    except Exception:
-        return None
-
-
-def _save_live_clusters_cache(df):
-    """Save live clusters data to local cache with today's date."""
-    try:
-        cache_dir = os.path.dirname(LIVE_CLUSTERS_CACHE_FILE)
-        os.makedirs(cache_dir, exist_ok=True)
-        cache = {
-            "fetched_date": datetime.now().strftime("%Y-%m-%d"),
-            "fetched_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "record_count": len(df),
-            "data": df.to_dict(orient="records")
-        }
-        with open(LIVE_CLUSTERS_CACHE_FILE, "w") as f:
-            json.dump(cache, f, default=str)
-    except (OSError, Exception):
-        pass  # Silently fail on Cloud read-only FS
-
-
-def fetch_live_clusters(client, force_refresh=False):
-    """Fetch active payout clusters. Uses daily cache — only queries BigQuery once per day."""
-    # Check in-memory cache first (avoids disk I/O on every rerun)
-    if not force_refresh and "live_cluster_df_cache" in st.session_state:
-        return st.session_state["live_cluster_df_cache"], None
-
-    # Check file cache
-    if not force_refresh:
-        cached = _get_live_clusters_cache()
-        if cached is not None:
-            st.session_state["live_cluster_df_cache"] = cached
-            return cached, None
-
-    # Cache miss or stale — query BigQuery
-    try:
-        query = """
-        SELECT gc.id, gc.created, gc.modified, gc.hub_id,
-            eh.name AS hub_name, gc.cluster_code, gc.description,
-            gc.boundary, gc.is_active, gc.cluster_category,
-            gc.cluster_type, gc.pincode, gc.surge_amount
-        FROM `data-warehousing-391512.ecommerce.geocode_geoclusters` gc
-        LEFT JOIN `data-warehousing-391512.ecommerce.ecommerce_hub` eh
-            ON gc.hub_id = eh.id
-        WHERE is_active = TRUE
-            AND cluster_type = "payout_cluster"
-        """
-        result = client.query(query).to_dataframe(timeout=300)
-        # Save to file cache + in-memory cache
-        _save_live_clusters_cache(result)
-        st.session_state["live_cluster_df_cache"] = result
-        return result, None
-    except GoogleAPIError as e:
-        return None, f"BigQuery API Error: {e}"
-    except Exception as e:
-        return None, f"Error: {e}"
-
-
-def fetch_hub_locations(client, year, month):
-    """Fetch hub locations with year/month. Cached in session_state by (year, month)."""
-    cache_key = f"hub_loc_cache_{year}_{month}"
-    if cache_key in st.session_state:
-        return st.session_state[cache_key], None
-    try:
-        query = """
-        SELECT eh.creation_date, eh.id, eh.name,
-            COALESCE(ehl.latitude, eh.latitude) AS latitude,
-            COALESCE(ehl.longitude, eh.longitude) AS longitude,
-            eh.hub_category
-        FROM `data-warehousing-391512.ecommerce.ecommerce_hub` eh
-        LEFT JOIN `data-warehousing-391512.analytics_tables.ecommerce_hub_locations` ehl
-            ON eh.id = ehl.hub_id
-            AND ehl.year = @year
-            AND ehl.month = @month
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("year", "INT64", int(year)),
-                bigquery.ScalarQueryParameter("month", "INT64", int(month)),
-            ]
-        )
-        result = client.query(query, job_config=job_config).to_dataframe(timeout=300)
-        st.session_state[cache_key] = result
-        return result, None
-    except GoogleAPIError as e:
-        return None, f"BigQuery API Error: {e}"
-    except Exception as e:
-        return None, f"Error: {e}"
 
 
 # ════════════════════════════════════════════════════

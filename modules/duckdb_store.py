@@ -30,7 +30,6 @@ TABLE_MAP = {
     "awb_raw_df":          "awb_raw_df",
     "awb_cluster_df":      "awb_cluster_df",
     "final_result_df":     "final_result_df",
-    "live_cluster_df":     "live_cluster_df",
 }
 
 

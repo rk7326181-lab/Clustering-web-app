@@ -25,11 +25,11 @@ The **Geo Intelligence Portal** helps logistics and operations teams:
 
 ---
 
-## Application Flow (7 Steps)
+## Application Flow (6 Steps)
 
 ```
 Step 1 › Data Ingestion
-        Upload Cluster CSV + Pincodes CSV + GeoJSON boundaries
+        Pincodes CSV + GeoJSON boundaries auto-load from data/ — upload only the Cluster CSV
         (or auto-load from BigQuery / previously saved outputs)
 
 Step 2 › P-Mapping
@@ -47,15 +47,11 @@ Step 4 › AWB Analysis
         Point-in-polygon cluster assignment via Shapely STRtree spatial index
         Calculates P&L: P-Mapping payout vs. Cluster payout per AWB
 
-Step 5 › Live Clusters
-        Pulls production cluster config from BigQuery
-        Side-by-side: test clusters vs. live clusters
-
-Step 6 › Financial Intelligence
+Step 5 › Financial Intelligence
         Pivot: Hub × Pincode → Saving / Burning / P&L %
         AI burn analysis: top 5 high-cost pincodes + fix recommendations
 
-Step 7 › AI Agent
+Step 6 › AI Agent
         Natural language chat — "Why is hub X burning?"
         Groq LLaMA 3 with full app + domain context
 ```
@@ -83,19 +79,17 @@ Step 7 › AI Agent
 
 ```
 Clustering-web-app/
-├── app.py                          # Main Streamlit app — 7-step pipeline
+├── app.py                          # Main Streamlit app — 6-step pipeline
 ├── requirements.txt                # Python dependencies
 ├── packages.txt                    # System libs: libgdal, libgeos, libproj
 │
 ├── modules/
 │   ├── polygon_generator.py        # Concentric ring polygons + KML export
 │   ├── visualizer.py               # Folium maps (polygon, OSRM, editable)
-│   ├── map_renderer.py             # MapRenderer class (cluster map builder)
 │   ├── ai_agent.py                 # Groq LLaMA 3 chat + financial analysis
 │   ├── cost_analyzer.py            # Hub cost metrics, savings/burn, recommendations
 │   ├── dashboard_builder.py        # Pivot table + financial report builder
 │   ├── data_loader.py              # CSV / BigQuery / Kepler.gl format loading
-│   ├── live_cluster_utils.py       # Live cluster fetch + comparison logic
 │   ├── cluster_assignor.py         # Point-in-polygon AWB assignment (STRtree)
 │   ├── bigquery_client.py          # BigQuery client + OAuth flow
 │   └── duckdb_store.py             # Local DuckDB session cache
@@ -105,14 +99,14 @@ Clustering-web-app/
 │
 ├── data/                           # Reference data (auto-loaded on startup)
 │   ├── Clustering_Automation.csv   # Hub-pincode input
-│   ├── Pincodes_1.csv              # Pincode volumetric centroids
+│   ├── pincodes_ref.csv            # Pincode volumetric centroids (auto-loaded)
+│   ├── geojson_boundaries.json.gz  # All-India pincode boundaries (auto-loaded)
 │   ├── final_output.csv            # Pre-computed P-Mapping distances
 │   └── Awb_with_cluster_info.csv   # AWB cluster assignment results
 │
 ├── outputs/                        # Generated on first run (auto-created)
 │   ├── Clustering_payout_polygon_*.csv / .xlsx / .kml
 │   ├── Awb_with_polygon_mapping.csv
-│   ├── live_clusters_cache.json
 │   └── Hub_Payout_Views_Final_All_Hubs/   # PNG map per hub
 │
 ├── .streamlit/
