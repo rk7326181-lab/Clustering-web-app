@@ -282,7 +282,7 @@ from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
                    haversine_km, get_pricing, get_hub_color_map,
                    save_file_path, load_file_paths_config, _filter_geojson_to_cluster,
                    CLUSTER_MAP, DESCRIPTION_MAPPING, HUB_COLORS, PRICING_SLABS,
-                   PCAT_SOP, RATE_TO_PCAT, rate_to_pcat,
+                   PCAT_SOP, RATE_TO_PCAT, rate_to_pcat, pcat_to_payout,
                    OUTPUT_DIR, HUB_IMG_DIR, DATA_DIR)
 
 init_session_state()
@@ -781,7 +781,7 @@ if st.session_state.get("auto_run_requested"):
             try:
                 auto_progress.progress(0.55, text="Fetching AWB data from BigQuery...")
                 from modules.bigquery_client import fetch_awb_data
-                from modules.cluster_assignor import assign_clusters, calculate_financials
+                from modules.cluster_assignor import assign_clusters, build_spa_mapping, calculate_financials
                 cdf_for_awb = st.session_state.get("cluster_df")
                 awb_df, err = fetch_awb_data(bq, cdf_for_awb)
                 if err:
@@ -790,15 +790,19 @@ if st.session_state.get("auto_run_requested"):
                     st.session_state["awb_raw_df"] = awb_df
                     auto_progress.progress(0.7, text="Assigning clusters...")
                     poly_df = st.session_state.get("polygon_records_df")
-                    if poly_df is not None:
-                        result_df = assign_clusters(awb_df, poly_df)
+                    fodf_auto = st.session_state.get("final_output_df")
+                    if poly_df is None:
+                        steps_failed.append("Step 4: Cluster assignment ❌ (no polygons)")
+                    elif fodf_auto is None:
+                        steps_failed.append("Step 4: Cluster assignment ❌ (no P-Mapping output — run Step 2 first)")
+                    else:
+                        spa_auto = build_spa_mapping(fodf_auto, overrides=st.session_state.get("pmapping_overrides"))
+                        result_df = assign_clusters(awb_df, poly_df, spa_auto)
                         result_df = calculate_financials(result_df)
                         st.session_state["final_result_df"] = result_df
                         result_df.to_csv(os.path.join(OUTPUT_DIR, "Awb_with_cluster_info.csv"), index=False)
                         steps_completed.append(f"Step 4: AWB Analysis ✅ ({len(result_df)} AWBs)")
                         add_log(f"Auto-run: AWB analysis complete ({len(result_df)} AWBs)", "success")
-                    else:
-                        steps_failed.append("Step 4: Cluster assignment ❌ (no polygons)")
             except Exception as e:
                 steps_failed.append(f"Step 4: AWB Analysis ❌ ({e})")
         elif st.session_state.get("final_result_df") is not None:
@@ -1973,6 +1977,24 @@ elif nav.startswith("4"):
             st.caption(f"Total rows: {len(awb):,}")
             st.download_button("Download Awb_with_polygon_mapping.csv", get_download_bytes(awb, "csv"), "Awb_with_polygon_mapping.csv", "text/csv", key="dl_awb_raw")
 
+            # ── Existing Pincode Mapping (Production) ──
+            _awb_cols = {c.strip().lower(): c for c in awb.columns}
+            if "pincode" in _awb_cols and "payment_category" in _awb_cols:
+                st.markdown('<div class="sfx-header">Existing Pincode Mapping (Production)</div>', unsafe_allow_html=True)
+                _map_cols = [_awb_cols["pincode"]] + ([_awb_cols["hub"]] if "hub" in _awb_cols else []) + [_awb_cols["payment_category"]]
+                _pin_map = awb[_map_cols].drop_duplicates(subset=[_awb_cols["pincode"]]).copy()
+                _pin_map.columns = ["Pincode"] + (["Hub"] if "hub" in _awb_cols else []) + ["Existing P Category"]
+                _pin_map["Payout (₹)"] = _pin_map["Existing P Category"].map(pcat_to_payout)
+                _pin_map = _pin_map.sort_values([c for c in ["Hub", "Pincode"] if c in _pin_map.columns]).reset_index(drop=True)
+                _n_mapped = _pin_map["Existing P Category"].notna().sum()
+                _n_unknown = int((_pin_map["Existing P Category"].notna() & _pin_map["Payout (₹)"].isna()).sum())
+                _cap = f"{len(_pin_map):,} pincodes · {_n_mapped:,} with a production category"
+                if _n_unknown:
+                    _cap += f" · {_n_unknown} unknown categories — treated as no mapping"
+                st.caption(_cap)
+                st.dataframe(_pin_map, use_container_width=True, height=280)
+                st.download_button("Download Existing Pincode Mapping", get_download_bytes(_pin_map, "csv"), "Existing_pincode_mapping.csv", "text/csv", key="dl_existing_pinmap")
+
     with st2:
         st.markdown('<div class="sfx-header">Cluster Assignment + P&L</div>', unsafe_allow_html=True)
         awb = st.session_state.get("awb_raw_df"); poly = st.session_state.get("polygon_records_df"); fodf = st.session_state.get("final_output_df")
@@ -1987,7 +2009,7 @@ elif nav.startswith("4"):
             if st.button("Assign Clusters + Calculate P&L", type="primary", key="assign"):
                 try:
                     from modules.cluster_assignor import assign_clusters, build_spa_mapping, calculate_financials
-                    spa = build_spa_mapping(fodf); add_log("Cluster assignment started", "info")
+                    spa = build_spa_mapping(fodf, overrides=st.session_state.get("pmapping_overrides")); add_log("Cluster assignment started", "info")
                     prog = st.progress(0, "Assigning clusters...")
                     start = time.time()
                     res = assign_clusters(awb, poly, spa, progress_cb=lambda p: prog.progress(p))
@@ -2002,8 +2024,12 @@ elif nav.startswith("4"):
 
         rdf = st.session_state.get("final_result_df")
         if rdf is not None and "Pin_Pay" in rdf.columns:
+            _kpi_ex = ""
+            if "Existing_Pin_Pay" in rdf.columns:
+                _kpi_ex = f'<div class="kpi-card orange"><div class="kpi-label">Existing Pin Pay</div><div class="kpi-value">₹{rdf["Existing_Pin_Pay"].sum():,.0f}</div></div>'
             st.markdown(f'''<div class="kpi-row">
-                <div class="kpi-card blue"><div class="kpi-label">Pin Pay</div><div class="kpi-value">₹{rdf["Pin_Pay"].sum():,.0f}</div></div>
+                <div class="kpi-card blue"><div class="kpi-label">Pin Pay (SOP)</div><div class="kpi-value">₹{rdf["Pin_Pay"].sum():,.0f}</div></div>
+                {_kpi_ex}
                 <div class="kpi-card purple"><div class="kpi-label">Cluster Pay</div><div class="kpi-value">₹{rdf["Clustering_payout"].sum():,.0f}</div></div>
                 <div class="kpi-card green"><div class="kpi-label">Saving</div><div class="kpi-value">₹{rdf["Saving"].sum():,.0f}</div></div>
                 <div class="kpi-card red"><div class="kpi-label">Burning</div><div class="kpi-value">₹{rdf["Burning"].sum():,.0f}</div></div>
@@ -2269,13 +2295,18 @@ elif nav.startswith("5"):
         from modules.dashboard_builder import build_pivot_report, style_report_html, compute_insights, build_comparison_table
         from modules.ai_agent import run_auto_analysis, chat_with_agent
         report = build_pivot_report(rdf); ins = compute_insights(report); comp = build_comparison_table(report)
+        _has_existing = "Existing_Pincode_Pay" in report.columns
 
-        dtab1, dtab2, dtab3 = st.tabs(["Pivot Table", "P-Map vs Cluster", "AI Analysis"])
+        dtab1, dtab2, dtab3 = st.tabs(["Pivot Table", "P-Map vs Existing vs Cluster" if _has_existing else "P-Map vs Cluster", "AI Analysis"])
 
         with dtab1:
             # KPI Cards
+            _ex_kpi = ""
+            if _has_existing:
+                _ex_kpi = f'<div class="kpi-card orange"><div class="kpi-label">Existing P-Map Pay</div><div class="kpi-value">₹{ins.get("total_existing_pincode_pay", 0):,.0f}</div></div>'
             st.markdown(f'''<div class="kpi-row">
-                <div class="kpi-card blue"><div class="kpi-label">Expected Pay</div><div class="kpi-value">₹{ins.get("total_expt_pincode_pay", 0):,.0f}</div></div>
+                <div class="kpi-card blue"><div class="kpi-label">Expected Pay (SOP)</div><div class="kpi-value">₹{ins.get("total_expt_pincode_pay", 0):,.0f}</div></div>
+                {_ex_kpi}
                 <div class="kpi-card purple"><div class="kpi-label">Cluster Payout</div><div class="kpi-value">₹{ins.get("total_cluster_payout", 0):,.0f}</div></div>
                 <div class="kpi-card green"><div class="kpi-label">Saving</div><div class="kpi-value">₹{ins.get("total_saving", 0):,.0f}</div></div>
                 <div class="kpi-card red"><div class="kpi-label">Burning</div><div class="kpi-value">₹{ins.get("total_burning", 0):,.0f}</div></div>
@@ -2298,8 +2329,61 @@ elif nav.startswith("5"):
                 st.data_editor(report, use_container_width=True, height=400)
 
         with dtab2:
-            st.markdown('<div class="sfx-header">P-Mapping vs Cluster Comparison</div>', unsafe_allow_html=True)
-            if comp is not None and not comp.empty:
+            if comp is not None and not comp.empty and "Existing_Pincode_Pay" in comp.columns:
+                st.markdown('<div class="sfx-header">SOP P-Mapping vs Existing P-Mapping vs Cluster</div>', unsafe_allow_html=True)
+                sop_t = comp["Expt_Pincode_Pay"].sum()
+                ex_t = comp["Existing_Pincode_Pay"].sum()
+                cl_t = comp["Cluster_Payout"].sum()
+                _n_unmapped = int(comp["Existing_Pincode_Pay"].isna().sum())
+
+                st.markdown(f'''<div class="kpi-row">
+                    <div class="kpi-card blue"><div class="kpi-label">SOP P-Map Total</div><div class="kpi-value">₹{sop_t:,.0f}</div></div>
+                    <div class="kpi-card orange"><div class="kpi-label">Existing P-Map Total</div><div class="kpi-value">₹{ex_t:,.0f}</div></div>
+                    <div class="kpi-card purple"><div class="kpi-label">Cluster Total</div><div class="kpi-value">₹{cl_t:,.0f}</div></div>
+                </div>''', unsafe_allow_html=True)
+                if _n_unmapped:
+                    st.caption(f"{_n_unmapped} pincode(s) have no production mapping — shown as — and excluded from the Existing total.")
+
+                _totals = {"Cluster-based payout": cl_t, "SOP P-Mapping (Step 2)": sop_t, "Existing P-Mapping (production)": ex_t}
+                _best_system = min(_totals, key=_totals.get)
+                _second = sorted(_totals.values())[1]
+                _sv_vs_next = _second - _totals[_best_system]
+                _cherry = comp["Saving_Amount"].sum()
+
+                sop_w = (comp["Winner"] == "SOP P-Map Cheapest").sum()
+                ex_w = (comp["Winner"] == "Existing P-Map Cheapest").sum()
+                cl_w = (comp["Winner"] == "Cluster Cheapest").sum()
+                tie_w = (comp["Winner"] == "Tie").sum()
+
+                st.markdown(f'''<div class="kpi-row">
+                    <div class="kpi-card blue"><div class="kpi-label">SOP P-Map Cheapest</div><div class="kpi-value">{sop_w} pincodes</div></div>
+                    <div class="kpi-card orange"><div class="kpi-label">Existing Cheapest</div><div class="kpi-value">{ex_w} pincodes</div></div>
+                    <div class="kpi-card green"><div class="kpi-label">Cluster Cheapest</div><div class="kpi-value">{cl_w} pincodes</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Tie</div><div class="kpi-value">{tie_w} pincodes</div></div>
+                </div>''', unsafe_allow_html=True)
+
+                st.markdown(f'<div class="sfx-ok">Recommendation: <b>{_best_system}</b> has the lowest total payout '
+                            f'(₹{_totals[_best_system]:,.0f}, ₹{_sv_vs_next:,.0f} less than the next option). '
+                            f'Picking the cheapest system per pincode would save ₹{_cherry:,.0f} vs the existing production mapping.</div>',
+                            unsafe_allow_html=True)
+
+                def color_row3(row):
+                    if row["Winner"] == "Cluster Cheapest":
+                        return ["background:#EDF4EE"] * len(row)
+                    elif row["Winner"] == "Existing P-Map Cheapest":
+                        return ["background:#FFF7ED"] * len(row)
+                    elif row["Winner"] == "SOP P-Map Cheapest":
+                        return ["background:#EFF6FF"] * len(row)
+                    return ["background:#F7FAF7"] * len(row)
+
+                st.dataframe(comp.style.apply(color_row3, axis=1).format({
+                    "Expt_Pincode_Pay": "₹{:,.0f}", "Existing_Pincode_Pay": "₹{:,.0f}",
+                    "Cluster_Payout": "₹{:,.0f}", "Difference": "₹{:,.0f}",
+                    "Best_Pay": "₹{:,.0f}", "Saving_Amount": "₹{:,.0f}",
+                }, na_rep="—"), use_container_width=True, height=400)
+                st.download_button("Download Comparison CSV", get_download_bytes(comp, "csv"), "Comparison.csv", "text/csv", key="dl_comp")
+            elif comp is not None and not comp.empty:
+                st.markdown('<div class="sfx-header">P-Mapping vs Cluster Comparison</div>', unsafe_allow_html=True)
                 cl_w = (comp["Winner"] == "Cluster Cheaper").sum()
                 pm_w = (comp["Winner"] == "P-Map Cheaper").sum()
                 cl_s = comp[comp["Winner"] == "Cluster Cheaper"]["Saving_Amount"].sum()

@@ -58,6 +58,33 @@ def rate_to_pcat(rate_str):
     """Convert a ₹-rate string to its default P-category."""
     return RATE_TO_PCAT.get(str(rate_str), str(rate_str))
 
+
+def pcat_to_payout(val):
+    """Convert a P-category or legacy rate value to its ₹ payout per AWB.
+
+    Accepts "P4"/"p4"/"P2.0" (PCAT_SOP rate — the category number is NOT the
+    rate, e.g. P34 → ₹3), legacy "₹4"/"4"/numeric (rate as-is), and returns
+    NaN for "Nil"/empty/unknown categories.
+    """
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return float("nan")
+    s = str(val).strip().replace("₹", "").replace(",", "")
+    if s == "" or s.lower() in ("nan", "none", "nil"):
+        return float("nan")
+    su = s.upper()
+    if su.startswith("P"):
+        num = su[1:]
+        if num.endswith(".0"):
+            num = num[:-2]
+        pcat = "P" + num
+        if pcat in PCAT_SOP:
+            return float(PCAT_SOP[pcat][0])
+        return float("nan")
+    try:
+        return float(s)
+    except ValueError:
+        return float("nan")
+
 FALLBACK_PINCODE_MAP = {
     580011: "C4", 203209: "C8", 282009: "C6",
     584128: "C2", 110074: "C2", 800001: "C0",

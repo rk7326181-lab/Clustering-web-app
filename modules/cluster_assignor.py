@@ -9,7 +9,7 @@ from shapely.wkt import loads as load_wkt
 from shapely.geometry import Point
 from shapely.prepared import prep
 from shapely import STRtree
-from utils import DESCRIPTION_MAPPING, FALLBACK_PINCODE_MAP
+from utils import DESCRIPTION_MAPPING, FALLBACK_PINCODE_MAP, pcat_to_payout
 
 
 @st.cache_resource(ttl=3600)
@@ -74,7 +74,8 @@ def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
     if df.empty:
         return pd.DataFrame(columns=[
             "order_date", "awb_number", "rider_id", "pincode",
-            "payment_category", "hub", "lat", "long", "cluster_name", "description",
+            "payment_category", "existing_payment_category",
+            "hub", "lat", "long", "cluster_name", "description",
         ])
 
     n = len(df)
@@ -92,6 +93,9 @@ def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
     awb_numbers = _col("fwd_del_awb_number", "awb_number")
     rider_ids   = _col("rider_id")
     hubs        = _col("hub")
+    # Production P-category as fetched from BigQuery (client_pincode_active_data).
+    # Preserved separately — payment_category below is overwritten with the SOP mapping.
+    existing_pcats = _col("existing_payment_category", "payment_category")
 
     cluster_name_col = np.full(n, None, dtype=object)
     description_col  = np.full(n, None, dtype=object)
@@ -205,6 +209,7 @@ def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
         "rider_id":         rider_ids,
         "pincode":          pincodes,
         "payment_category": payment_col.to_numpy(),
+        "existing_payment_category": existing_pcats,
         "hub":              hubs,
         "lat":              lats,
         "long":             lons,
@@ -217,6 +222,13 @@ def calculate_financials(df):
     r = df.copy()
     r["Pin_Pay"] = pd.to_numeric(r["payment_category"], errors="coerce")
     r["Clustering_payout"] = r["description"].map(DESCRIPTION_MAPPING).fillna(r["Pin_Pay"])
+    # Existing/production P-mapping payout (from the BigQuery fetch), priced with
+    # the same category→₹ table. NaN preserved per row: a pincode with no
+    # production mapping must not read as ₹0 (₹0 is a legitimate P1 rate).
+    if "existing_payment_category" in r.columns:
+        _ex = r["existing_payment_category"].map(pcat_to_payout)
+        if _ex.notna().any():
+            r["Existing_Pin_Pay"] = _ex
     r["P & L"] = r["Pin_Pay"] - r["Clustering_payout"]
     r["Saving"] = r["P & L"].apply(lambda x: x if x > 0 else 0)
     r["Burning"] = r["P & L"].apply(lambda x: -x if x < 0 else 0)
@@ -233,19 +245,26 @@ def calculate_financials(df):
     return r[has_financial | has_coords].reset_index(drop=True)
 
 
-def build_spa_mapping(final_output_df):
+def build_spa_mapping(final_output_df, overrides=None):
+    """Pincode → ₹ payout from Step 2's P-Mapping output.
+
+    Handles both the current P-category format ("P1"…"P41") and the legacy
+    rupee format ("₹4") via pcat_to_payout. `overrides` is Step 2's manual
+    "Switch P Category" dict (pincode str → P-category) and wins per pincode.
+    """
     df = final_output_df.copy()
     df.columns = df.columns.str.strip()
-    df["SP&A Aligned P mapping"] = (
-        df["SP&A Aligned P mapping"].astype(str)
-        .str.replace("₹", "", regex=False).str.replace(",", "", regex=False).str.strip()
-        .replace({"Nil": float("nan"), "nan": float("nan"), "": float("nan")})
-    )
-    df["SP&A Aligned P mapping"] = pd.to_numeric(df["SP&A Aligned P mapping"], errors="coerce")
+    df["SP&A Aligned P mapping"] = df["SP&A Aligned P mapping"].map(pcat_to_payout)
     mapping = {}
     for _, row in df.iterrows():
         pc = str(row["Pincode"]).strip().replace(".0", "")
         val = row["SP&A Aligned P mapping"]
+        mapping[pc] = val
+        try: mapping[int(pc)] = val
+        except ValueError: pass
+    for k, v in (overrides or {}).items():
+        pc = str(k).strip().replace(".0", "")
+        val = pcat_to_payout(v)
         mapping[pc] = val
         try: mapping[int(pc)] = val
         except ValueError: pass
