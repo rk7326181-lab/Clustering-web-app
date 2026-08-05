@@ -545,11 +545,14 @@ else:
                            "your network is blocking Google's sign-in chain — switch networks or "
                            "upload a Service Account key below instead.")
     elif _is_cloud:
-        # Web OAuth not configured — desktop flow won't work on Cloud, so show instructions
-        st.sidebar.error(
-            "Google OAuth not configured. Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, "
-            "and `REDIRECT_URI` to Streamlit secrets (or add `client_id` / `client_secret` "
-            "under the `[gcp_credentials]` section)."
+        # No usable web OAuth client on Cloud — show the working recovery path
+        st.sidebar.warning(
+            "Google sign-in from the deployed app needs a 'Web application' OAuth client "
+            "(GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in secrets, with this app's URL as an "
+            "authorized redirect URI in Google Cloud Console).\n\n"
+            "**Easier:** on your computer run `python generate_bq_token.py` from the repo, "
+            "sign in with your Google account, then paste the generated block into this app's "
+            "**Settings → Secrets** — the app will then connect automatically every time."
         )
     else:
         # Fallback: local OAuth (desktop — run_local_server) — only works on local machines

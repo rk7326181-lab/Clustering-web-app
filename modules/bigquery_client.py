@@ -498,8 +498,11 @@ def _get_web_oauth_config():
 
 
 def _get_redirect_uri():
-    """Get OAuth redirect URI: secrets/env override, else auto-detect from the
-    incoming request's Host header (works on Streamlit Cloud and locally)."""
+    """Get OAuth redirect URI: secrets/env override, else the app's own external URL.
+
+    On Streamlit Cloud the app sits behind a proxy, so the Host header is the
+    INTERNAL localhost:8501 — use st.context.url (browser-visible URL,
+    Streamlit >= 1.44) first, then X-Forwarded-Host, then Host."""
     uri = None
     try:
         uri = st.secrets.get("REDIRECT_URI")
@@ -509,10 +512,24 @@ def _get_redirect_uri():
         uri = os.environ.get("REDIRECT_URI")
     if not uri:
         try:
-            host = st.context.headers.get("host")
-            if host:
-                scheme = "http" if host.split(":")[0] in ("localhost", "127.0.0.1") else "https"
-                uri = f"{scheme}://{host}"
+            from urllib.parse import urlsplit
+            page_url = getattr(st.context, "url", None)
+            if page_url:
+                parts = urlsplit(page_url)
+                if parts.scheme and parts.netloc:
+                    uri = f"{parts.scheme}://{parts.netloc}"
+        except Exception:
+            pass
+    if not uri:
+        try:
+            headers = st.context.headers
+            host = headers.get("X-Forwarded-Host") or headers.get("x-forwarded-host")
+            proto = headers.get("X-Forwarded-Proto") or headers.get("x-forwarded-proto") or "https"
+            if not host:
+                host = headers.get("host")
+                proto = "http" if host and host.split(":")[0] in ("localhost", "127.0.0.1") else "https"
+            if host and host.split(":")[0] not in ("localhost", "127.0.0.1"):
+                uri = f"{proto}://{host}"
         except Exception:
             pass
     if not uri:
@@ -542,6 +559,13 @@ def get_google_auth_url():
 
     config = _get_web_oauth_config()
     if not config:
+        return None, "not_configured"
+
+    # The built-in gcloud/desktop client only allows localhost redirects —
+    # a web redirect back to *.streamlit.app can never work with it, so don't
+    # offer the button on Cloud (use generate_bq_token.py secrets instead).
+    _is_cloud = os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true"
+    if _is_cloud and config["client_id"] == OAUTH_CLIENT_CONFIG["installed"]["client_id"]:
         return None, "not_configured"
 
     redirect_uri = _get_redirect_uri()
