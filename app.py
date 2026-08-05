@@ -540,7 +540,10 @@ else:
     _auth_url, _auth_state = get_google_auth_url()
     if _auth_url:
         st.sidebar.link_button("🔐 Sign in with Google", _auth_url, type="primary", use_container_width=True)
-        st.sidebar.caption("Redirects to Google for sign-in. No JSON key needed.")
+        st.sidebar.caption("Redirects to Google for sign-in. No JSON key needed. "
+                           "If sign-in fails mid-way with a connection error (accounts.youtube.com), "
+                           "your network is blocking Google's sign-in chain — switch networks or "
+                           "upload a Service Account key below instead.")
     elif _is_cloud:
         # Web OAuth not configured — desktop flow won't work on Cloud, so show instructions
         st.sidebar.error(

@@ -498,7 +498,8 @@ def _get_web_oauth_config():
 
 
 def _get_redirect_uri():
-    """Get OAuth redirect URI from secrets/env. Auto-detects Streamlit Cloud URL."""
+    """Get OAuth redirect URI: secrets/env override, else auto-detect from the
+    incoming request's Host header (works on Streamlit Cloud and locally)."""
     uri = None
     try:
         uri = st.secrets.get("REDIRECT_URI")
@@ -507,10 +508,14 @@ def _get_redirect_uri():
     if not uri:
         uri = os.environ.get("REDIRECT_URI")
     if not uri:
-        # Auto-detect: on Streamlit Cloud, construct from hostname
-        if os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true":
-            st.warning("REDIRECT_URI not set in secrets. OAuth redirect may not work. "
-                       "Add REDIRECT_URI = \"https://your-app.streamlit.app/\" to your Streamlit secrets.")
+        try:
+            host = st.context.headers.get("host")
+            if host:
+                scheme = "http" if host.split(":")[0] in ("localhost", "127.0.0.1") else "https"
+                uri = f"{scheme}://{host}"
+        except Exception:
+            pass
+    if not uri:
         uri = "http://localhost:8501"
     return uri.rstrip("/")
 
