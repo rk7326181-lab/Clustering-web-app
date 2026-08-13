@@ -311,7 +311,7 @@ var activeCtrl = null;
 // ── Map setup ──────────────────────────────────────────────────────────────
 var map = L.map('map', {{center:[{center_lat:.5f},{center_lon:.5f}], zoom:10}});
 
-var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{attribution:'© OSM',maxZoom:19}}).addTo(map);
+var osm = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}.png',{{attribution:'© OpenStreetMap © CARTO',maxZoom:19}}).addTo(map);
 var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',{{attribution:'Esri',maxZoom:19}});
 L.control.layers({{'Street Map':osm,'Satellite':sat}},{{}},{{position:'topright'}}).addTo(map);
 L.control.scale({{position:'bottomright'}}).addTo(map);

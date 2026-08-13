@@ -357,7 +357,7 @@ def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
             hub_gdf = gpd.GeoDataFrame(geometry=[gpd.points_from_xy([hlon], [hlat])[0]], crs="EPSG:4326").to_crs(epsg=3857)
             ax.plot(hub_gdf.geometry.iloc[0].x, hub_gdf.geometry.iloc[0].y, "r^", markersize=14, zorder=5)
             try:
-                ctx.add_basemap(ax, source=ctx.providers.OpenStreetMap.Mapnik, zoom='auto')
+                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Voyager, zoom='auto')
             except Exception:
                 try:
                     ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron, zoom='auto')
@@ -1865,7 +1865,7 @@ elif nav.startswith("3"):
                         ax.plot(hub_x, hub_y, "r^", markersize=14, zorder=5)
                         # Add OpenStreetMap basemap
                         try:
-                            ctx.add_basemap(ax, source=ctx.providers.OpenStreetMap.Mapnik, zoom='auto')
+                            ctx.add_basemap(ax, source=ctx.providers.CartoDB.Voyager, zoom='auto')
                         except Exception:
                             try:
                                 ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron, zoom='auto')
