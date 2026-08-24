@@ -23,5 +23,13 @@ Thumbs.db
 # Environment variables
 .env
 
+# Streamlit secrets (BigQuery credentials, Groq key, login password) —
+# NEVER commit. Copy .streamlit/secrets.toml.example on the server instead.
+.streamlit/secrets.toml
+
 # User-specific runtime config (per-machine file paths)
 outputs/file_paths_config.json
+
+# Self-hosted deployment runtime (PIDs, logs) — see deploy/
+deploy/run/
+deploy/logs/

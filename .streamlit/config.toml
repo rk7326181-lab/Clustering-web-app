@@ -4,3 +4,12 @@ primaryColor = "#0B8A7A"
 
 [server]
 maxUploadSize = 500
+# Self-hosted deployment (Tailscale): bind all interfaces so the Tailscale
+# network can reach this app. Do NOT port-forward this port on your router —
+# access is intended to be private, via Tailscale only. See DEPLOYMENT.md.
+address = "0.0.0.0"
+port = 8501
+headless = true
+
+[browser]
+gatherUsageStats = false
