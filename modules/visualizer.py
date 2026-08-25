@@ -269,8 +269,16 @@ def _base_map(center_lat, center_lon, zoom=9, satellite=False, draw_enabled=Fals
     # Apply the India bounding box as a hard pan limit on the underlying Leaflet map
     m.options["maxBounds"] = [_INDIA_SW, _INDIA_NE]
     # Multi-tile layers — Street / Satellite / Terrain
-    folium.TileLayer("OpenStreetMap", name="Street Map", min_zoom=4, max_zoom=18,
-                     bounds=[_INDIA_SW, _INDIA_NE]).add_to(m)
+    # NOTE: NOT folium's "OpenStreetMap" shorthand — OSM's volunteer tile
+    # servers now block this app's requests (403 "Access blocked" tiles
+    # rendered as if they were valid images, leaving the map blank under
+    # the polygons). CartoDB Voyager is OSM-derived data with a policy that
+    # explicitly permits this kind of usage.
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        attr="© OpenStreetMap contributors © CARTO", name="Street Map",
+        min_zoom=4, max_zoom=18, bounds=[_INDIA_SW, _INDIA_NE],
+    ).add_to(m)
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         attr="Esri", name="Satellite", overlay=False, control=True,
