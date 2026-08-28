@@ -318,13 +318,55 @@ def render_step_guard(missing, hint):
               on_click=lambda: st.session_state.update(nav="1. Data Ingestion"))
     st.stop()
 
+def _add_map_backdrop(ax):
+    """Draw the hub-image map backdrop with a guaranteed-reliable floor.
+
+    History: this used to fetch OpenStreetMap tiles, which started blocking
+    this app's requests (baked "Access blocked" text into the tile image
+    itself). Switched to CartoDB — which then started requiring an API key
+    for anonymous fetches, again returning a "watermarked but technically
+    valid" image instead of raising an error, so a try/except fallback
+    never even triggers. Two different free hosted tile providers have now
+    changed policy on us; a third could too.
+
+    So: a live basemap (Esri — the same host already used for years by the
+    Satellite/Terrain layers elsewhere in this app with zero incidents) is
+    still attempted as a best-effort visual enhancement, but the function
+    NEVER depends on it succeeding. The guaranteed layer is the pincode
+    boundary shapes already loaded in session_state (geojson_data) — pure
+    local data, no network call, so there is nothing left for any third
+    party to ever block, rate-limit, or paywall.
+    """
+    try:
+        import contextily as ctx
+        ctx.add_basemap(ax, source=ctx.providers.Esri.WorldStreetMap, zoom="auto", zorder=0)
+    except Exception:
+        pass
+    try:
+        geo = st.session_state.get("geojson_data")
+        if geo and geo.get("features"):
+            import geopandas as gpd
+            from shapely.geometry import shape
+            geoms = []
+            for feat in geo["features"]:
+                try:
+                    geoms.append(shape(feat["geometry"]))
+                except Exception:
+                    continue
+            if geoms:
+                pgdf = gpd.GeoDataFrame(geometry=geoms, crs="EPSG:4326").to_crs(epsg=3857)
+                pgdf.plot(ax=ax, facecolor="#eef3f5", edgecolor="#b8c4c9",
+                          linewidth=0.6, alpha=0.6, zorder=1)
+    except Exception:
+        pass
+
+
 def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
     """Render and save a PNG for a single hub using its current polygons. Returns the saved path or None."""
     try:
         import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
         from shapely.wkt import loads as wkt_loads
         import geopandas as gpd
-        import contextily as ctx
         ensure_output_dirs()
         hps = poly_df[poly_df[hub_col] == hub_name]
         if hps.empty:
@@ -356,13 +398,7 @@ def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
                         bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, boxstyle="round,pad=0.3"), zorder=6)
             hub_gdf = gpd.GeoDataFrame(geometry=[gpd.points_from_xy([hlon], [hlat])[0]], crs="EPSG:4326").to_crs(epsg=3857)
             ax.plot(hub_gdf.geometry.iloc[0].x, hub_gdf.geometry.iloc[0].y, "r^", markersize=14, zorder=5)
-            try:
-                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Voyager, zoom='auto')
-            except Exception:
-                try:
-                    ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron, zoom='auto')
-                except Exception:
-                    pass
+            _add_map_backdrop(ax)
         else:
             ax.plot(hlon, hlat, "r^", markersize=14, zorder=5)
         ax.set_title(hub_name, fontsize=14, fontweight="bold", color="#0B8A7A")
@@ -1819,7 +1855,6 @@ elif nav.startswith("3"):
                 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
                 from shapely.wkt import loads as wkt_loads
                 import geopandas as gpd
-                import contextily as ctx
                 out_dir = HUB_IMG_DIR; ensure_output_dirs()
                 all_hubs = pdf[hub_col].unique().tolist(); hcm = get_hub_color_map(all_hubs)
                 _img_status = st.status(f"Generating {len(all_hubs)} hub image(s)...", expanded=True)
@@ -1863,14 +1898,7 @@ elif nav.startswith("3"):
                         hub_gdf = gpd.GeoDataFrame(geometry=[gpd.points_from_xy([hlon], [hlat])[0]], crs="EPSG:4326").to_crs(epsg=3857)
                         hub_x, hub_y = hub_gdf.geometry.iloc[0].x, hub_gdf.geometry.iloc[0].y
                         ax.plot(hub_x, hub_y, "r^", markersize=14, zorder=5)
-                        # Add OpenStreetMap basemap
-                        try:
-                            ctx.add_basemap(ax, source=ctx.providers.CartoDB.Voyager, zoom='auto')
-                        except Exception:
-                            try:
-                                ctx.add_basemap(ax, source=ctx.providers.CartoDB.Positron, zoom='auto')
-                            except Exception:
-                                pass
+                        _add_map_backdrop(ax)
                     else:
                         ax.plot(hlon, hlat, "r^", markersize=14, zorder=5)
                     ax.set_title(hn, fontsize=14, fontweight="bold", color="#0B8A7A")
