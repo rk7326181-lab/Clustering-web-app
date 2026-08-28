@@ -30,6 +30,16 @@ Thumbs.db
 # User-specific runtime config (per-machine file paths)
 outputs/file_paths_config.json
 
+# Generated hub map images — pure display/download artifacts (write-only:
+# never read back into session_state or re-used as data, unlike the CSV/
+# JSON files elsewhere in outputs/, which ARE deliberately committed so
+# Cloud restarts can reload them — don't extend this rule to those).
+# A committed PNG here previously baked in OpenStreetMap's "Access blocked"
+# tile image from before a basemap-provider fix and kept shipping with
+# every deploy for 4 months; this directory should never be source-
+# controlled again — the app regenerates these on demand.
+outputs/Hub_Payout_Views_Final_All_Hubs/*.png
+
 # Self-hosted deployment runtime (PIDs, logs) — see deploy/
 deploy/run/
 deploy/logs/

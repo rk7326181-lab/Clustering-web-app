@@ -66,7 +66,7 @@ Step 6 › AI Agent
 | Interactive maps | Folium 0.15 + streamlit-folium 0.22 | Free |
 | Geometry engine | Shapely ≥ 2.0, GeoPandas ≥ 0.14 | Free |
 | Road routing | OSRM public API (project-osrm.org) | Free |
-| Basemap tiles | OpenStreetMap + ESRI via contextily | Free |
+| Basemap tiles | CartoDB (OSM-derived) + ESRI via contextily | Free |
 | AI / LLM | Groq API — LLaMA 3.1 8B / 70B | Free tier |
 | Data warehouse | Google BigQuery | Free tier (1 TB/month queries) |
 | Local DB cache | DuckDB ≥ 0.9 | Free |
@@ -266,7 +266,7 @@ All results are cached in a local DuckDB file and auto-reloaded on next session 
 | **CSV** | Polygon records: WKT geometry, cluster codes, payout tiers |
 | **XLSX** | Spreadsheet version with same data |
 | **KML** | Google Earth: hub markers + styled ring polygons |
-| **PNG** | Static hub map image — per hub, OSM basemap (matplotlib + contextily) |
+| **PNG** | Static hub map image — per hub, CartoDB basemap (matplotlib + contextily) |
 
 ---
 
