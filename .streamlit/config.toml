@@ -4,12 +4,16 @@ primaryColor = "#0B8A7A"
 
 [server]
 maxUploadSize = 500
-# Self-hosted deployment (Tailscale): bind all interfaces so the Tailscale
-# network can reach this app. Do NOT port-forward this port on your router —
-# access is intended to be private, via Tailscale only. See DEPLOYMENT.md.
-address = "0.0.0.0"
-port = 8501
 headless = true
+# IMPORTANT: do NOT set server.address / server.port here. Streamlit
+# Community Cloud manages its own port and reverse-proxy binding, and a
+# hardcoded custom port/address in this file can break the Cloud
+# deployment outright ("Oh no. Error running app.") — this broke the
+# sibling repo (cluster-payout-optimization) when port 8502 was added
+# there. For self-hosted/Tailscale deployment, deploy\start.ps1 already
+# passes --server.address=0.0.0.0 --server.port=8501 explicitly on the
+# command line, which overrides this file — no config.toml change is
+# needed or safe for that. See DEPLOYMENT.md.
 
 [browser]
 gatherUsageStats = false
