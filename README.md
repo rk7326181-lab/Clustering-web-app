@@ -81,7 +81,6 @@ Step 6 › AI Agent
 Clustering-web-app/
 ├── app.py                          # Main Streamlit app — 6-step pipeline
 ├── requirements.txt                # Python dependencies
-├── packages.txt                    # System libs: libgdal, libgeos, libproj
 │
 ├── modules/
 │   ├── polygon_generator.py        # Concentric ring polygons + KML export
@@ -161,7 +160,7 @@ Pincode | Volumetric Lat | Volumetric Long   ← column names auto-detected
 
 ### Prerequisites
 - Python 3.11+
-- Linux / WSL / macOS (for system geo libraries)
+- Linux / WSL / macOS / Windows
 
 ### 1 — Clone
 ```bash
@@ -169,11 +168,11 @@ git clone https://github.com/rk7326181-lab/Clustering-web-app.git
 cd Clustering-web-app
 ```
 
-### 2 — System dependencies (Linux / WSL / macOS)
-```bash
-sudo apt update && sudo apt install -y \
-    libgdal-dev libgeos-dev libproj-dev proj-data proj-bin gdal-bin
-```
+### 2 — System dependencies
+None. shapely bundles GEOS, pyproj bundles PROJ and rasterio bundles GDAL,
+all inside their wheels. Do not add a `packages.txt` to this repo — it makes
+Streamlit Cloud run `apt-get` against a base image with an expired
+`bullseye-security` source, which fails the deploy. See `requirements.txt`.
 
 ### 3 — Python dependencies
 ```bash
