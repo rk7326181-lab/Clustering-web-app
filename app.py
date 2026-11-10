@@ -651,6 +651,7 @@ nav = st.sidebar.radio("NAVIGATE", [
     "4. AWB + Visualisation",
     "5. Financial Intelligence",
     "6. AI Agent",
+    "7. My Maps Polygons",
 ], index=0, key="nav")
 
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
@@ -867,6 +868,46 @@ if st.session_state.get("auto_run_requested"):
         # Add summary to sidebar chat
         summary = "Pipeline auto-run complete:\n" + "\n".join(steps_completed + steps_failed)
         st.session_state["sidebar_chat_history"].append({"role": "assistant", "content": summary})
+
+# ═══════════════════════════════════════════════════════
+# GOOGLE MY MAPS CONNECTOR (shared by the My Maps page + Step 3)
+# ═══════════════════════════════════════════════════════
+@st.cache_data(ttl=900, show_spinner=False)
+def _load_mymaps(url_or_id):
+    """Fetch + parse the My Maps KML. Cached 15 min; 'Refresh' clears it."""
+    from modules.mymaps_connector import load_map
+    return load_map(url_or_id, cache_dir=os.path.join(OUTPUT_DIR, "mymaps_cache"))
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=2)
+def _mymaps_all_csv(mid, fetched_at, _polygons):
+    """Full-map CSV, built once per fetch (tabs re-render on every rerun)."""
+    from modules.mymaps_connector import to_csv_bytes
+    return to_csv_bytes(_polygons)
+
+
+def _mymaps_url():
+    from modules.mymaps_connector import resolve_configured_url
+    if not st.session_state.get("mymaps_url"):
+        try:
+            st.session_state["mymaps_url"] = resolve_configured_url(st.secrets)
+        except Exception:
+            st.session_state["mymaps_url"] = resolve_configured_url(None)
+    return st.session_state["mymaps_url"]
+
+
+def _get_mymaps():
+    """Return the loaded map dict, or None after showing the error."""
+    from modules.mymaps_connector import MyMapsError
+    try:
+        with st.spinner("Reading polygons from Google My Maps..."):
+            return _load_mymaps(_mymaps_url())
+    except MyMapsError as e:
+        st.error(f"Google My Maps: {e}")
+    except Exception as e:
+        st.error(f"Google My Maps: could not read the map ({e})")
+    return None
+
 
 # ═══════════════════════════════════════════════════════
 # STEP 1 — DATA INGESTION
@@ -2561,6 +2602,218 @@ elif nav.startswith("6"):
         from modules.ai_agent import build_app_context
         ctx = build_app_context(st.session_state)
         st.code(ctx, language="markdown")
+
+# ═══════════════════════════════════════════════════════
+# 7 — GOOGLE MY MAPS POLYGONS (browse / count / download)
+# ═══════════════════════════════════════════════════════
+elif nav.startswith("7"):
+    import streamlit.components.v1 as components
+    from modules import mymaps_connector as mmc
+
+    st.markdown('<div class="sfx-header">Google My Maps — Hub Polygons</div>', unsafe_allow_html=True)
+    st.caption("Your Google My Maps map, inside the portal. View it live, open the My Maps editor to make "
+               "changes, and use the hub tabs to count and download polygons.")
+
+    # ── Connection ──
+    with st.expander("My Maps connection", expanded=False):
+        _mm_new_url = st.text_input("My Maps link or map ID", value=_mymaps_url(), key="mm_url_input",
+                                    help="Any My Maps link containing '?mid=...'. The map must be shared as "
+                                         "'Anyone with the link can view'. Set MYMAPS_URL in secrets to change the default.")
+        if _mm_new_url.strip() and _mm_new_url.strip() != st.session_state.get("mymaps_url"):
+            st.session_state["mymaps_url"] = _mm_new_url.strip()
+            st.rerun()
+    _mm_c1, _mm_c2 = st.columns([4, 1])
+    with _mm_c2:
+        if st.button("🔄 Refresh from My Maps", key="mm_refresh", use_container_width=True,
+                     help="Re-read the map now (otherwise it is re-read every 15 minutes)."):
+            _load_mymaps.clear()
+            # Also reload the embedded live map (a changed src forces the iframe to reload).
+            st.session_state["mm_embed_rev"] = st.session_state.get("mm_embed_rev", 0) + 1
+            add_log("My Maps refreshed", "info")
+    try:
+        _mm_mid = mmc.extract_map_id(_mymaps_url())
+    except mmc.MyMapsError as _e:
+        st.error(str(_e)); st.stop()
+    _edit_link = f"https://www.google.com/maps/d/edit?mid={_mm_mid}"
+    mm = _get_mymaps()  # None if the KML can't be read -- the live view below still works
+
+    tab_live, tab_hub, tab_find, tab_all = st.tabs(["🗺 Live My Maps", "By Hub", "Find Polygon", "All Hubs Overview"])
+
+    # ── Live My Maps (Google's own map, embedded) ──
+    with tab_live:
+        _lv1, _lv2 = st.columns([3, 1])
+        _zoom_hub = None
+        with _lv1:
+            if mm is not None and not mm["hubs"].empty:
+                _zoom_hub = st.selectbox("Zoom to hub", ["(whole map)"] + mm["hubs"]["Hub Name"].tolist(),
+                                         key="mm_live_hub")
+        with _lv2:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            st.link_button("✏️ Open My Maps editor", _edit_link, type="primary", use_container_width=True)
+        _embed = f"https://www.google.com/maps/d/embed?mid={_mm_mid}&rev={st.session_state.get('mm_embed_rev', 0)}"
+        if _zoom_hub and _zoom_hub != "(whole map)":
+            _h = mm["hubs"][mm["hubs"]["Hub Name"] == _zoom_hub].iloc[0]
+            _embed += f"&ll={_h['Hub_lat']},{_h['Hub_long']}&z=12"
+        if hasattr(st, "iframe"):
+            st.iframe(_embed, height=720)
+        else:
+            components.iframe(_embed, height=720)
+        st.caption("This is your live My Maps map (view only — Google does not allow its editor inside other "
+                   "websites). To change polygons, click **Open My Maps editor**, edit and it saves "
+                   "automatically in My Maps; then click **🔄 Refresh from My Maps** here to see the changes "
+                   "and update the counts.")
+
+    if mm is None:
+        for _t in (tab_hub, tab_find, tab_all):
+            with _t:
+                st.warning("Polygon data could not be read from My Maps (see the error above). "
+                           "The Live My Maps tab still works.")
+        st.stop()
+    mpoly, mhubs, minfo = mm["polygons"], mm["hubs"], mm["info"]
+    with _mm_c1:
+        _when = datetime.fromtimestamp(minfo["fetched_at"]).strftime("%d %b %H:%M")
+        if minfo.get("stale"):
+            st.markdown(f'<div class="sfx-warn">Showing the last saved copy from {_when} — {minfo.get("reason")}</div>',
+                        unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="sfx-ok">✅ Connected to <b>{mm["title"] or "My Maps"}</b> · read at {_when} · '
+                        f'<a href="{_edit_link}" target="_blank">open in My Maps ↗</a></div>', unsafe_allow_html=True)
+
+    def _mm_map(sel_df, hub_names, height=600):
+        """Render the selection with the app's standard polygon map."""
+        if sel_df.empty:
+            return
+        if len(sel_df) > 3000:
+            st.info(f"{len(sel_df):,} polygons selected — map shows the first 3,000. Downloads include all.")
+            sel_df = sel_df.head(3000)
+        from modules.visualizer import create_polygon_map
+        _hub_pts = mhubs[mhubs["Hub Name"].isin(hub_names)].rename(columns={"Hub Name": "Hub_Name"})
+        m = create_polygon_map(sel_df, _hub_pts if not _hub_pts.empty else None, None, False, "none", None, "All", None, True)
+        if m is not None:
+            components.html(m._repr_html_(), height=height, scrolling=False)
+
+    def _mm_downloads(sel_df, hub_names, slug, key):
+        _stamp = datetime.now().strftime("%Y%m%d")
+        _hub_pts = mhubs[mhubs["Hub Name"].isin(hub_names)]
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            st.download_button("⬇ CSV", mmc.to_csv_bytes(sel_df), f"{slug}_polygons_{_stamp}.csv",
+                               "text/csv", key=f"{key}_csv", use_container_width=True)
+        with d2:
+            st.download_button("⬇ KML (My Maps)", mmc.to_kml(sel_df, _hub_pts, slug).encode("utf-8"),
+                               f"{slug}_polygons_{_stamp}.kml", "application/vnd.google-earth.kml+xml",
+                               key=f"{key}_kml", use_container_width=True)
+        with d3:
+            st.download_button("⬇ GeoJSON", mmc.to_geojson(sel_df).encode("utf-8"),
+                               f"{slug}_polygons_{_stamp}.geojson", "application/geo+json",
+                               key=f"{key}_geojson", use_container_width=True)
+
+    def _mm_table(sel_df, key):
+        _show_wkt = st.checkbox("Show geometry (WKT) column", value=False, key=f"{key}_wkt")
+        _cols = [c for c in ["Hub Name", "Cluster_Code", "Pincode", "Cluster_Category", "Description",
+                             "Layer", "Hub Source"] + (["Polygon WKT"] if _show_wkt else []) if c in sel_df.columns]
+        st.dataframe(sel_df[_cols], use_container_width=True, height=min(420, 35 * len(sel_df) + 38),
+                     hide_index=True)
+
+    # ── By Hub ──
+    with tab_hub:
+        _all_hubs = mmc.list_hubs(mpoly)
+        sel_hubs = st.multiselect("Hub name", _all_hubs, key="mm_hubs", placeholder="Type to search hubs…")
+        if not sel_hubs:
+            st.info("Select one or more hubs to see their polygons.")
+        else:
+            # Hubs present in several My Maps layers would otherwise come back twice.
+            _layers_in = sorted(mmc.get_hub_polygons(mpoly, sel_hubs)["Layer"].unique())
+            _default_layers = sorted({l for h in sel_hubs for l in mmc.default_layers_for_hub(mpoly, h)})
+            if len(_layers_in) > 1:
+                sel_layers = st.multiselect(
+                    "My Maps layers", _layers_in, default=_default_layers, key=f"mm_layers_{'|'.join(sel_hubs)}",
+                    help="This selection exists in more than one My Maps layer. Defaults to layers where the hub "
+                         "name is written on the polygons.")
+            else:
+                sel_layers = _layers_in
+            sel = mmc.get_hub_polygons(mpoly, sel_hubs, sel_layers)
+
+            _dups = sel.duplicated(["Hub Name", "Cluster_Code"]).sum()
+            kpi_row([
+                ("Polygons", f"{len(sel):,}", "blue"),
+                ("Pincodes", f"{sel['Pincode'].replace('', pd.NA).nunique():,}", "green"),
+                ("Rate bands", f"{sel['Description'].replace('', pd.NA).nunique()}", "purple"),
+                ("Layers", f"{sel['Layer'].nunique()}", "orange"),
+            ])
+            if _dups:
+                st.markdown(f'<div class="sfx-warn">{_dups} Cluster_Code(s) appear in more than one selected layer — '
+                            f'deselect a layer above to avoid duplicates.</div>', unsafe_allow_html=True)
+            _inferred = sel["Hub Source"].str.startswith("inferred").sum()
+            if _inferred:
+                st.caption(f"ℹ️ {_inferred} polygon(s) have no hub written on them in My Maps; their hub was "
+                           f"taken from the same Cluster_Code in another layer or the nearest hub pin "
+                           f"(see the 'Hub Source' column).")
+
+            _bc1, _bc2 = st.columns(2)
+            with _bc1:
+                st.markdown("**Polygons per rate / category**")
+                _br = (sel.assign(Rate=sel["Description"].replace("", "—"),
+                                  Category=sel["Cluster_Category"].replace("", "—"))
+                          .groupby(["Rate", "Category"]).size().reset_index(name="Polygons"))
+                st.dataframe(_br, hide_index=True, use_container_width=True)
+            with _bc2:
+                st.markdown("**Polygons per hub / pincode**")
+                _bp = sel.groupby(["Hub Name", "Pincode"]).size().reset_index(name="Polygons")
+                st.dataframe(_bp, hide_index=True, use_container_width=True, height=min(300, 35 * len(_bp) + 38))
+
+            _mm_map(sel, sel_hubs)
+            _slug = sel_hubs[0] if len(sel_hubs) == 1 else f"{len(sel_hubs)}hubs"
+            _mm_downloads(sel, sel_hubs, _slug.replace(" ", "_").replace("/", "_"), "mm_hub")
+            _mm_table(sel, "mm_hub")
+
+    # ── Find a polygon ──
+    with tab_find:
+        _q = st.text_input("Cluster code, pincode or hub", key="mm_query",
+                           placeholder="e.g. 206131_A, or 206131, or ETW_Udi — comma-separate several")
+        if _q.strip():
+            found = mmc.find_polygons(mpoly, _q)
+            if found.empty:
+                st.warning("No polygon matches that in My Maps.")
+            else:
+                kpi_row([
+                    ("Matches", f"{len(found):,}", "blue"),
+                    ("Hubs", f"{found['Hub Name'].replace('', pd.NA).nunique()}", "green"),
+                    ("Layers", f"{found['Layer'].nunique()}", "orange"),
+                ])
+                _mm_map(found, found["Hub Name"].unique().tolist(), height=520)
+                _qslug = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in _q.strip())[:40]
+                _mm_downloads(found, found["Hub Name"].unique().tolist(), _qslug, "mm_find")
+                _mm_table(found, "mm_find")
+
+    # ── Overview ──
+    with tab_all:
+        kpi_row([
+            ("Total Polygons", f"{len(mpoly):,}", "blue"),
+            ("Hubs", f"{len(mmc.list_hubs(mpoly)):,}", "green"),
+            ("Pincodes", f"{mpoly['Pincode'].replace('', pd.NA).nunique():,}", "purple"),
+            ("Layers", f"{mpoly['Layer'].nunique()}", "orange"),
+        ])
+        _summ = mmc.hub_summary(mpoly)
+        st.markdown(f"**{len(_summ):,} hubs in My Maps**")
+        st.dataframe(_summ, hide_index=True, use_container_width=True, height=460)
+        _o1, _o2, _o3 = st.columns(3)
+        with _o1:
+            st.download_button("⬇ Hub summary CSV", _summ.to_csv(index=False).encode("utf-8-sig"),
+                               f"mymaps_hub_summary_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv",
+                               key="mm_summ_dl", use_container_width=True)
+        with _o2:
+            st.download_button("⬇ All polygons CSV", _mymaps_all_csv(minfo["mid"], minfo["fetched_at"], mpoly),
+                               f"mymaps_all_polygons_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv",
+                               key="mm_all_dl", use_container_width=True)
+        with _o3:
+            st.download_button("⬇ Hub locations CSV", mhubs.to_csv(index=False).encode("utf-8-sig"),
+                               f"mymaps_hub_locations_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv",
+                               key="mm_hubs_dl", use_container_width=True)
+        st.markdown("**Polygons per My Maps layer**")
+        st.dataframe(mpoly.groupby("Layer").agg(Polygons=("Cluster_Code", "size"),
+                                                Hubs=("Hub Name", "nunique")).reset_index(),
+                     hide_index=True, use_container_width=True)
 
 # ═══════════════════════════════════════════════════════
 # BOTTOM — Activity Log (always visible via expander)
