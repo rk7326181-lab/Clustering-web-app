@@ -577,8 +577,8 @@ def to_kml(polygons: pd.DataFrame, hubs: pd.DataFrame | None = None, title: str 
 
 
 def to_csv_bytes(polygons: pd.DataFrame) -> bytes:
-    """Polygon table as CSV in the app's standard column order (+ Layer, Hub Source)."""
-    cols = [c for c in POLYGON_COLUMNS + ["Hub Source"] if c in polygons.columns]
+    """Polygon table as CSV in the app's standard column order (+ Map, Layer, Hub Source)."""
+    cols = [c for c in ["Map"] + POLYGON_COLUMNS + ["Hub Source"] if c in polygons.columns]
     return polygons[cols].to_csv(index=False).encode("utf-8-sig")
 
 
@@ -598,3 +598,242 @@ def to_geojson(polygons: pd.DataFrame) -> str:
     return json.dumps({"type": "FeatureCollection", "features": feats})
 
 
+
+
+# ─────────────────────────────────────────────────────────────
+# Several My Maps links
+# ─────────────────────────────────────────────────────────────
+def _link(name, url, source):
+    try:
+        mid = extract_map_id(url)
+    except MyMapsError:
+        return None
+    return {"name": (str(name or "").strip() or mid), "url": str(url).strip(), "mid": mid, "source": source}
+
+
+def configured_links(secrets=None) -> list[dict]:
+    """Maps set by the admin -- not removable from the UI.
+
+    Read from Streamlit secrets, any of:
+        [[mymaps]]                      # one table per map
+        name = "North hubs"
+        url  = "https://www.google.com/maps/d/edit?mid=..."
+        MYMAPS_URLS = ["https://...", "https://..."]
+        MYMAPS_URL  = "https://..."
+    then env vars MYMAPS_URLS (comma-separated) / MYMAPS_URL, then the default map.
+    """
+    out = []
+
+    def sget(k):
+        try:
+            return secrets.get(k) if secrets is not None else None
+        except Exception:
+            return None
+
+    for t in (sget("mymaps") or []):
+        try:
+            out.append(_link(t.get("name"), t.get("url"), "secrets"))
+        except Exception:
+            pass
+    for u in (sget("MYMAPS_URLS") or []):
+        out.append(_link("", u, "secrets"))
+    if sget("MYMAPS_URL"):
+        out.append(_link("", sget("MYMAPS_URL"), "secrets"))
+    for u in filter(None, (os.environ.get("MYMAPS_URLS") or "").split(",")):
+        out.append(_link("", u, "env"))
+    if os.environ.get("MYMAPS_URL"):
+        out.append(_link("", os.environ["MYMAPS_URL"], "env"))
+    if not any(out):
+        out.append(_link("Hub_Cluster-Amrutraj", DEFAULT_MYMAPS_URL, "default"))
+    return [l for l in out if l]
+
+
+def load_saved_links(path: str) -> list[dict]:
+    """Maps added from the UI (a small JSON file)."""
+    import json
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [l for l in (_link(r.get("name"), r.get("url"), "saved") for r in raw if isinstance(r, dict)) if l]
+
+
+def save_links(path: str, links: list[dict]) -> None:
+    import json
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump([{"name": l["name"], "url": l["url"]} for l in links], f, indent=2, ensure_ascii=False)
+
+
+def merge_links(*groups: list[dict]) -> list[dict]:
+    """Concatenate link lists, first occurrence of each map ID wins."""
+    seen, out = set(), []
+    for g in groups:
+        for l in g:
+            if l["mid"] not in seen:
+                seen.add(l["mid"])
+                out.append(l)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────
+# Photo (PNG) of a set of polygons
+# ─────────────────────────────────────────────────────────────
+# Same buckets/colours as the app's map legend (modules/visualizer.py).
+_RATE_BUCKETS = [
+    ("₹0", lambda r: r == 0, "#22c55e"),
+    ("₹1–₹2", lambda r: 0 < r <= 2, "#3b82f6"),
+    ("₹3–₹4", lambda r: 2 < r <= 4, "#8b5cf6"),
+    ("₹5–₹6", lambda r: 4 < r <= 6, "#f59e0b"),
+    ("₹7–₹8", lambda r: 6 < r <= 8, "#ef4444"),
+    ("₹9+", lambda r: r > 8, "#991b1b"),
+]
+_NO_RATE = ("Nil / no rate", "#6b7280")
+
+
+def _rate_bucket(desc):
+    try:
+        r = float(str(desc).replace("₹", "").strip())
+    except ValueError:
+        return _NO_RATE
+    for label, test, color in _RATE_BUCKETS:
+        if test(r):
+            return label, color
+    return _NO_RATE
+
+
+def _merc_to_lonlat_bounds(x0, y0, x1, y1):
+    import math
+    lon = lambda x: x / 6378137.0 * 180 / math.pi
+    lat = lambda y: math.degrees(2 * math.atan(math.exp(y / 6378137.0)) - math.pi / 2)
+    return lon(x0), lat(y0), lon(x1), lat(y1)
+
+
+def _basemap_zoom(bounds_lonlat) -> int:
+    """Tile zoom giving ~5 tiles across the extent (contextily's zoom='auto'
+    fetches several times more tiles than a 14-inch figure needs)."""
+    import math
+    minx, miny, maxx, maxy = bounds_lonlat
+    span = max(maxx - minx, (maxy - miny) * 1.15, 1e-3)  # larger side (lat ~ lon near India)
+    return int(min(15, max(4, math.floor(math.log2(5 * 360 / span)))))
+
+
+def render_png(polygons: pd.DataFrame, hubs: pd.DataFrame | None = None, title: str = "",
+               basemap: bool = True, dpi: int = 150) -> bytes:
+    """Draw polygons (coloured by rate, labelled) + hub pins on a street basemap; return PNG bytes.
+
+    The basemap (Esri, via contextily) is best-effort: without network the
+    photo is still produced, just on a plain background.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    import geopandas as gpd
+    from shapely.wkt import loads as wkt_loads
+
+    recs = []
+    for _, r in polygons.iterrows():
+        try:
+            g = wkt_loads(str(r["Polygon WKT"]))
+        except Exception:
+            continue
+        label, color = _rate_bucket(r.get("Description", ""))
+        recs.append({"geometry": g, "rate": str(r.get("Description", "") or ""), "bucket": label,
+                     "color": color, "code": str(r.get("Cluster_Code", ""))})
+    if not recs:
+        raise MyMapsError("Nothing to draw -- the selection has no polygon geometry.")
+    gdf = gpd.GeoDataFrame(recs, geometry="geometry", crs="EPSG:4326").to_crs(epsg=3857)
+    # Biggest first so inner rings stay visible on top of outer ones.
+    gdf = gdf.assign(_a=gdf.area).sort_values("_a", ascending=False)
+
+    fig, ax = plt.subplots(figsize=(14, 10))
+    try:
+        gdf.plot(ax=ax, color=gdf["color"].tolist(), alpha=0.35, edgecolor="#1f2937", linewidth=1.0, zorder=2)
+        if len(gdf) <= 250:
+            for _, rp in gdf.iterrows():
+                p = rp.geometry.representative_point()
+                ax.text(p.x, p.y, rp["rate"] or rp["code"], ha="center", va="center", fontsize=8,
+                        fontweight="bold", zorder=6,
+                        bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, boxstyle="round,pad=0.25"))
+        if hubs is not None and not hubs.empty:
+            hg = gpd.GeoDataFrame(hubs[["Hub Name"]].copy(),
+                                  geometry=gpd.points_from_xy(hubs["Hub_long"], hubs["Hub_lat"]),
+                                  crs="EPSG:4326").to_crs(epsg=3857)
+            ax.scatter(hg.geometry.x, hg.geometry.y, marker="^", s=220, c="#dc2626",
+                       edgecolors="white", linewidths=1.5, zorder=7)
+            for _, h in hg.iterrows():
+                ax.annotate(h["Hub Name"], (h.geometry.x, h.geometry.y), xytext=(8, 8),
+                            textcoords="offset points", fontsize=10, fontweight="bold", color="#7f1d1d",
+                            zorder=8, bbox=dict(facecolor="white", edgecolor="#dc2626", alpha=0.9,
+                                                boxstyle="round,pad=0.3"))
+        minx, miny, maxx, maxy = gdf.total_bounds
+        if hubs is not None and not hubs.empty:  # keep hub pins in frame
+            minx, maxx = min(minx, hg.geometry.x.min()), max(maxx, hg.geometry.x.max())
+            miny, maxy = min(miny, hg.geometry.y.min()), max(maxy, hg.geometry.y.max())
+        # Pad, then widen the short side to the figure's 14:10 shape so the
+        # photo is never a thin strip.
+        cx, cy = (minx + maxx) / 2, (miny + maxy) / 2
+        w, hgt = max(maxx - minx, 1000) * 1.16, max(maxy - miny, 1000) * 1.16
+        if w / hgt < 1.4:
+            w = hgt * 1.4
+        else:
+            hgt = w / 1.4
+        ax.set_xlim(cx - w / 2, cx + w / 2)
+        ax.set_ylim(cy - hgt / 2, cy + hgt / 2)
+        if basemap:
+            try:
+                import contextily as ctx
+                src = ctx.providers.Esri.WorldStreetMap
+                (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
+                # bounds2img (not add_basemap) so tiles download in parallel:
+                # one-at-a-time took 15-70 s per photo, parallel ~3-5 s.
+                img, ext = ctx.bounds2img(x0, y0, x1, y1, source=src, n_connections=6, timeout=20,
+                                          zoom=_basemap_zoom(_merc_to_lonlat_bounds(x0, y0, x1, y1)))
+                ax.imshow(img, extent=ext, interpolation="bilinear", zorder=0)
+                ax.set_xlim(x0, x1); ax.set_ylim(y0, y1)
+                ctx.add_attribution(ax, src["attribution"], font_size=7)
+            except Exception:
+                pass
+        order = [b[0] for b in _RATE_BUCKETS] + [_NO_RATE[0]]
+        present = [b for b in order if b in set(gdf["bucket"])]
+        colors = dict(zip(gdf["bucket"], gdf["color"]))
+        ax.legend(handles=[Patch(facecolor=colors[b], edgecolor="#1f2937", alpha=0.6, label=b) for b in present],
+                  loc="lower right", title="Payout rate", fontsize=9, framealpha=0.95)
+        n_pins = polygons["Pincode"].replace("", pd.NA).nunique() if "Pincode" in polygons else 0
+        ax.set_title(f"{title}\n{len(gdf)} polygons · {n_pins} pincodes", fontsize=14,
+                     fontweight="bold", color="#0B8A7A")
+        ax.text(0.01, 0.99, f"Source: Google My Maps · {time.strftime('%d %b %Y')}", transform=ax.transAxes,
+                fontsize=8, color="#374151", zorder=9, va="top",
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.8))
+        ax.set_axis_off()
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor="white", pad_inches=0.1)
+        return buf.getvalue()
+    finally:
+        plt.close(fig)
+
+
+def render_hub_photos(polygons: pd.DataFrame, hubs: pd.DataFrame, hub_names, progress_cb=None):
+    """One PNG per hub (each framed on its own polygons). Returns [(hub, png_bytes)]."""
+    out = []
+    for i, hub in enumerate(hub_names):
+        sub = get_hub_polygons(polygons, hub)
+        if sub.empty:
+            continue
+        pins = hubs[hubs["Hub Name"].map(_norm_hub) == _norm_hub(hub)] if hubs is not None else None
+        out.append((hub, render_png(sub, pins, hub)))
+        if progress_cb:
+            progress_cb((i + 1) / len(hub_names), hub)
+    return out
+
+
+def photos_zip(photos) -> bytes:
+    """Zip [(hub, png)] as <hub>.png files."""
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for hub, png in photos:
+            safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", hub) or "hub"
+            zf.writestr(f"{safe}.png", png)
+    return buf.getvalue()
