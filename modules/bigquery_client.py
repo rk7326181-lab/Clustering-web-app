@@ -5,6 +5,7 @@ Exact SQL from the Jupyter notebook.
 """
 import os
 import json
+import time
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -109,6 +110,7 @@ def _load_cached_oauth_credentials():
 
 def clear_oauth_credentials():
     """Remove cached OAuth credentials (logout)."""
+    _AUTO_CONNECT_CACHE.update(at=0.0, result=None)  # don't hand the old client to new sessions
     if os.path.exists(CREDENTIALS_CACHE):
         os.remove(CREDENTIALS_CACHE)
 
@@ -288,15 +290,41 @@ def connect_with_google_oauth():
         return None, str(e)
 
 
+# Server-wide cache of a successful auto_connect(). Every source auto_connect tries
+# (Streamlit secrets, ADC, the cached OAuth token file, the remote token store) is
+# shared by the whole server anyway, so re-testing it for every new session only
+# cost ~5 s on every page refresh. Failures are never cached.
+_AUTO_CONNECT_CACHE = {"at": 0.0, "result": None}
+_AUTO_CONNECT_MAX_AGE = 10 * 60      # re-validate a working connection every 10 min (tokens rotate)
+_AUTO_CONNECT_RETRY_AFTER = 5 * 60   # when not connected, retry at most every 5 min per session
+
+
+def _auto_connect_shared():
+    now = time.time()
+    cached = _AUTO_CONNECT_CACHE["result"]
+    if cached and now - _AUTO_CONNECT_CACHE["at"] < _AUTO_CONNECT_MAX_AGE:
+        return cached
+    result = auto_connect()
+    if result[0] is not None:
+        _AUTO_CONNECT_CACHE.update(at=now, result=result)
+    return result
+
+
 def init_bq_on_startup():
     """
-    Called once on app startup. Tries ADC then cached OAuth silently.
+    Called on every rerun. Connects silently via the shared auto_connect cache.
     Sets st.session_state.bq_client and st.session_state.bq_auth_mode.
+    When nothing works, it does not retry on every click (each attempt makes
+    network calls): at most once every few minutes per session.
     """
     if st.session_state.get("bq_client") is not None:
         return  # Already connected
+    _last = st.session_state.get("_bq_auto_tried_at", 0)
+    if st.session_state.get("bq_auth_mode") == "needs_key" and time.time() - _last < _AUTO_CONNECT_RETRY_AFTER:
+        return
+    st.session_state["_bq_auto_tried_at"] = time.time()
 
-    client, mode, err = auto_connect()
+    client, mode, err = _auto_connect_shared()
     if client:
         st.session_state["bq_client"] = client
         st.session_state["bq_auth_mode"] = mode

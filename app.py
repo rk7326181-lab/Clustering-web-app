@@ -97,13 +97,13 @@ if not _check_access():
 # Session State + BQ Auto-connect
 # ═══════════════════════════════════════════════════════
 from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
-                   clean_pincode, get_download_bytes, show_df_download,
+                   clean_pincode, get_download_bytes, lazy_download_data, show_df_download,
                    detect_latlon_cols, detect_geojson_pincode_field,
                    haversine_km, get_pricing, get_hub_color_map,
                    save_file_path, load_file_paths_config, _filter_geojson_to_cluster,
                    CLUSTER_MAP, DESCRIPTION_MAPPING, HUB_COLORS, PRICING_SLABS,
                    PCAT_SOP, RATE_TO_PCAT, rate_to_pcat, pcat_to_payout,
-                   OUTPUT_DIR, HUB_IMG_DIR, DATA_DIR)
+                   OUTPUT_DIR, HUB_IMG_DIR, DATA_DIR, _LAZY_DOWNLOADS as _LAZY_DL)
 
 init_session_state()
 ensure_output_dirs()
@@ -123,6 +123,15 @@ def kpi_row(cards):
     html += '</div>'
     st.markdown(html, unsafe_allow_html=True)
 loaded = reload_from_disk()
+if "_persisted_ids" not in st.session_state:
+    # Frames that just came from DuckDB / CSV are already on disk: remember them so the
+    # auto-persist at the bottom doesn't write ~1.3M rows straight back (~4 s per start).
+    try:
+        from modules.duckdb_store import TABLE_MAP as _TM
+        st.session_state["_persisted_ids"] = {k: id(st.session_state[k]) for k in _TM
+                                              if st.session_state.get(k) is not None}
+    except Exception:
+        st.session_state["_persisted_ids"] = {}
 
 # Log system
 if "app_logs" not in st.session_state:
@@ -134,6 +143,13 @@ def add_log(msg, level="info"):
     if len(logs) > 200:  # Prevent unbounded memory growth
         st.session_state["app_logs"] = logs[-100:]
 
+def stop_page():
+    """st.stop() that still draws the footer, so a page that ends early doesn't
+    leave a bare grey screen."""
+    ui_theme.render_footer(datetime.now().year)
+    st.stop()
+
+
 def render_step_guard(missing, hint):
     """Friendly guard for steps opened before their input data exists: list what's
     missing, offer a jump to Step 1, and stop rendering the rest of the page."""
@@ -141,9 +157,9 @@ def render_step_guard(missing, hint):
     st.markdown(
         f'<div class="sfx-warn"><b>This step needs data that is not loaded yet:</b>'
         f'<ul>{items}</ul>{hint}</div>', unsafe_allow_html=True)
-    st.button("Go to Step 1 — Data Ingestion", key="_guard_goto1",
+    st.button("Go to Step 1 — Data Ingestion", key="_guard_goto1", type="primary",
               on_click=lambda: st.session_state.update(nav="1. Data Ingestion"))
-    st.stop()
+    stop_page()
 
 def _add_map_backdrop(ax):
     """Draw the hub-image map backdrop with a guaranteed-reliable floor.
@@ -659,6 +675,13 @@ def _mymaps_all_csv(mid, fetched_at, _polygons):
     return to_csv_bytes(_polygons)
 
 
+@st.cache_data(ttl=900, show_spinner=False, max_entries=8)
+def _mymaps_hub_summary(mid, fetched_at, _polygons):
+    """Per-hub counts, built once per fetch (took ~1 s on every click on this page)."""
+    from modules.mymaps_connector import hub_summary
+    return hub_summary(_polygons)
+
+
 def _mymaps_links():
     """All My Maps links: admin-configured (secrets/env/default) + ones added in the UI."""
     from modules.mymaps_connector import configured_links, load_saved_links, merge_links
@@ -970,7 +993,7 @@ elif nav.startswith("2"):
  style="padding:7px 18px;background:#fff;color:var(--teal);border:1.5px solid var(--teal);border-radius:9px;cursor:pointer;font-weight:700;font-size:13px;font-family:inherit" onmouseover="this.style.background='var(--mint-3)'" onmouseout="this.style.background='#fff'">Copy</button>
 </div>""", unsafe_allow_html=True)
         st.data_editor(dfo, use_container_width=True, height=300, key="osrm_edit")
-        st.download_button("Download final_output.csv", get_download_bytes(fo, "csv"), "final_output.csv", "text/csv", key="dl_fo")
+        st.download_button("Download final_output.csv", lazy_download_data(fo, "csv"), "final_output.csv", "text/csv", key="dl_fo")
 
         if "SP&A Aligned P mapping" in fo.columns:
             dc = fo["SP&A Aligned P mapping"].value_counts().sort_index()
@@ -1034,7 +1057,7 @@ elif nav.startswith("2"):
 
         _show_cols = [c for c in ["Pincode","Hub_Name","Distance","SP&A Aligned P mapping","P_Category","Payout (₹/km)","Amount Capping"] if c in _pdf.columns]
         st.dataframe(_pdf[_show_cols], use_container_width=True, height=280)
-        st.download_button("Download with P Categories", get_download_bytes(_pdf, "csv"),
+        st.download_button("Download with P Categories", lazy_download_data(_pdf, "csv"),
                            "final_output_with_pcategory.csv", "text/csv", key="dl_fo_pcat")
 
         st.markdown('<div class="sfx-header">Map</div>', unsafe_allow_html=True)
@@ -1248,7 +1271,7 @@ elif nav.startswith("3"):
                 add_log("Polygon data saved", "success")
                 st.markdown('<div class="sfx-ok">✅ Saved!</div>', unsafe_allow_html=True)
         with ec2:
-            st.download_button("⬇ Download CSV", get_download_bytes(edited, "csv"), "polygon_edited.csv", "text/csv", key="dl_ed")
+            st.download_button("⬇ Download CSV", lazy_download_data(edited, "csv"), "polygon_edited.csv", "text/csv", key="dl_ed")
         with ec3:
             # Standalone KML download for the polygon data (no hub markers — raw polygon KML)
             _kml_wkt_col = "Polygon WKT" if "Polygon WKT" in edited.columns else ("boundary" if "boundary" in edited.columns else None)
@@ -1820,7 +1843,7 @@ elif nav.startswith("4"):
             st.markdown('<div class="sfx-header">AWB Data Preview</div>', unsafe_allow_html=True)
             st.dataframe(awb.head(10), use_container_width=True, height=300)
             st.caption(f"Total rows: {len(awb):,}")
-            st.download_button("Download Awb_with_polygon_mapping.csv", get_download_bytes(awb, "csv"), "Awb_with_polygon_mapping.csv", "text/csv", key="dl_awb_raw")
+            st.download_button("Download Awb_with_polygon_mapping.csv", lazy_download_data(awb, "csv"), "Awb_with_polygon_mapping.csv", "text/csv", key="dl_awb_raw")
 
             # ── Existing Pincode Mapping (Production) ──
             _awb_cols = {c.strip().lower(): c for c in awb.columns}
@@ -1838,7 +1861,7 @@ elif nav.startswith("4"):
                     _cap += f" · {_n_unknown} unknown categories — treated as no mapping"
                 st.caption(_cap)
                 st.dataframe(_pin_map, use_container_width=True, height=280)
-                st.download_button("Download Existing Pincode Mapping", get_download_bytes(_pin_map, "csv"), "Existing_pincode_mapping.csv", "text/csv", key="dl_existing_pinmap")
+                st.download_button("Download Existing Pincode Mapping", lazy_download_data(_pin_map, "csv"), "Existing_pincode_mapping.csv", "text/csv", key="dl_existing_pinmap")
 
     with st2:
         st.markdown('<div class="sfx-header">Cluster Assignment + P&L</div>', unsafe_allow_html=True)
@@ -2094,30 +2117,36 @@ elif nav.startswith("4"):
             _base4 = f"polygons_{sel_hub.replace(' ','_').replace('/','_')}_{datetime.now().strftime('%Y%m%d')}"
             _dc1, _dc2, _dc3 = st.columns(3)
             with _dc1:
-                st.download_button("⬇ CSV", get_download_bytes(_dl4, "csv"), f"{_base4}.csv", "text/csv", key="s4_dl_csv")
+                st.download_button("⬇ CSV", lazy_download_data(_dl4, "csv"), f"{_base4}.csv", "text/csv", key="s4_dl_csv")
+            # GeoJSON / KML are built on click (were rebuilt for every polygon on every rerun)
+            def _geojson4_bytes(_df=_dl4):
+                from shapely.wkt import loads as _wl4g
+                from shapely.geometry import mapping as _sm4g
+                _wc4g = "Polygon WKT" if "Polygon WKT" in _df.columns else "boundary"
+                _feats4 = []
+                for _, _r in _df.iterrows():
+                    try:
+                        _g = _wl4g(str(_r.get(_wc4g, "")))
+                        _props = {k: (None if pd.isna(v) else v) for k, v in _r.items() if k != _wc4g}
+                        _feats4.append({"type": "Feature", "geometry": _sm4g(_g), "properties": _props})
+                    except Exception:
+                        continue
+                return json.dumps({"type": "FeatureCollection", "features": _feats4}, default=str).encode("utf-8")
+
+            def _kml4_bytes(_df=_dl4):
+                from modules.visualizer import generate_kml as _gkml4
+                return (_gkml4(_df) or "").encode("utf-8")
+
             with _dc2:
                 try:
-                    from shapely.wkt import loads as _wl4g
-                    from shapely.geometry import mapping as _sm4g
-                    _wc4g = "Polygon WKT" if "Polygon WKT" in _dl4.columns else "boundary"
-                    _feats4 = []
-                    for _, _r in _dl4.iterrows():
-                        try:
-                            _g = _wl4g(str(_r.get(_wc4g, "")))
-                            _props = {k: (None if pd.isna(v) else v) for k, v in _r.items() if k != _wc4g}
-                            _feats4.append({"type": "Feature", "geometry": _sm4g(_g), "properties": _props})
-                        except Exception:
-                            continue
-                    _fc4g = {"type": "FeatureCollection", "features": _feats4}
-                    st.download_button("⬇ GeoJSON", json.dumps(_fc4g, default=str).encode("utf-8"), f"{_base4}.geojson", "application/geo+json", key="s4_dl_geojson")
+                    st.download_button("⬇ GeoJSON", _geojson4_bytes if _LAZY_DL else _geojson4_bytes(),
+                                       f"{_base4}.geojson", "application/geo+json", key="s4_dl_geojson")
                 except Exception as _eg:
                     st.caption(f"GeoJSON error: {_eg}")
             with _dc3:
                 try:
-                    from modules.visualizer import generate_kml as _gkml4
-                    _kml4 = _gkml4(_dl4)
-                    if _kml4:
-                        st.download_button("⬇ KML", _kml4.encode("utf-8"), f"{_base4}.kml", "application/vnd.google-earth.kml+xml", key="s4_dl_kml")
+                    st.download_button("⬇ KML", _kml4_bytes if _LAZY_DL else _kml4_bytes(),
+                                       f"{_base4}.kml", "application/vnd.google-earth.kml+xml", key="s4_dl_kml")
                 except Exception as _ek:
                     st.caption(f"KML error: {_ek}")
 
@@ -2133,7 +2162,7 @@ elif nav.startswith("5"):
             from modules.cluster_assignor import calculate_financials
             rdf = calculate_financials(rdf); st.session_state["final_result_df"] = rdf
         except Exception as e:
-            st.error(str(e)); st.stop()
+            st.error(str(e)); stop_page()
 
     try:
         from modules.dashboard_builder import build_pivot_report, style_report_html, compute_insights, build_comparison_table
@@ -2168,7 +2197,7 @@ elif nav.startswith("5"):
             st.markdown("---")
             st.markdown('<div class="sfx-header">Detailed P&L Report</div>', unsafe_allow_html=True)
             st.markdown(style_report_html(report), unsafe_allow_html=True)
-            st.download_button("Download Report CSV", get_download_bytes(report, "csv"), "Pivot_Table.csv", "text/csv", key="dl_piv")
+            st.download_button("Download Report CSV", lazy_download_data(report, "csv"), "Pivot_Table.csv", "text/csv", key="dl_piv")
             with st.expander("Editable View"):
                 st.data_editor(report, use_container_width=True, height=400)
 
@@ -2225,7 +2254,7 @@ elif nav.startswith("5"):
                     "Cluster_Payout": "₹{:,.0f}", "Difference": "₹{:,.0f}",
                     "Best_Pay": "₹{:,.0f}", "Saving_Amount": "₹{:,.0f}",
                 }, na_rep="—"), use_container_width=True, height=400)
-                st.download_button("Download Comparison CSV", get_download_bytes(comp, "csv"), "Comparison.csv", "text/csv", key="dl_comp")
+                st.download_button("Download Comparison CSV", lazy_download_data(comp, "csv"), "Comparison.csv", "text/csv", key="dl_comp")
             elif comp is not None and not comp.empty:
                 st.markdown('<div class="sfx-header">P-Mapping vs Cluster Comparison</div>', unsafe_allow_html=True)
                 cl_w = (comp["Winner"] == "Cluster Cheaper").sum()
@@ -2254,7 +2283,7 @@ elif nav.startswith("5"):
                     "Expt_Pincode_Pay": "₹{:,.0f}", "Cluster_Payout": "₹{:,.0f}",
                     "Difference": "₹{:,.0f}", "Saving_Amount": "₹{:,.0f}",
                 }), use_container_width=True, height=400)
-                st.download_button("Download Comparison CSV", get_download_bytes(comp, "csv"), "Comparison.csv", "text/csv", key="dl_comp")
+                st.download_button("Download Comparison CSV", lazy_download_data(comp, "csv"), "Comparison.csv", "text/csv", key="dl_comp")
             else:
                 st.info("Comparison requires financial data.")
 
@@ -2401,6 +2430,7 @@ elif nav.startswith("7"):
                      help="Re-read all maps now (otherwise each is re-read every 15 minutes)."):
             _load_mymaps.clear()
             _mymaps_all_csv.clear()
+            _mymaps_hub_summary.clear()
             # Also reload the embedded live map (a changed src forces the iframe to reload).
             st.session_state["mm_embed_rev"] = st.session_state.get("mm_embed_rev", 0) + 1
             add_log("My Maps refreshed", "info")
@@ -2570,7 +2600,7 @@ elif nav.startswith("7"):
             with _t:
                 st.warning(f"Polygon data could not be read from **{_active['name']}** (see the error above). "
                            f"The Live My Maps tab still works.")
-        st.stop()
+        stop_page()
     mpoly, mhubs, minfo = mm["polygons"], mm["hubs"], mm["info"]
     with _sw1:
         _when = datetime.fromtimestamp(minfo["fetched_at"]).strftime("%d %b %H:%M")
@@ -2679,7 +2709,7 @@ elif nav.startswith("7"):
             ("Pincodes", f"{mpoly['Pincode'].replace('', pd.NA).nunique():,}", "purple"),
             ("Layers", f"{mpoly['Layer'].nunique()}", "orange"),
         ])
-        _summ = mmc.hub_summary(mpoly)
+        _summ = _mymaps_hub_summary(minfo["mid"], minfo["fetched_at"], mpoly)
         st.markdown(f"**{len(_summ):,} hubs in {_active['name']}**")
         st.dataframe(_summ, hide_index=True, use_container_width=True, height=460)
         _o1, _o2, _o3 = st.columns(3)
@@ -2726,16 +2756,15 @@ ui_theme.render_footer(datetime.now().year)
 # ═══════════════════════════════════════════════════════
 try:
     from modules.duckdb_store import TABLE_MAP, save_df, _is_streamlit_cloud
-    # Skip auto-persist on Cloud (read-only FS, /tmp/ is ephemeral anyway)
-    # On local, only persist once per session to avoid repeated writes on every rerun
-    if not _is_streamlit_cloud() and not st.session_state.get("_duckdb_persisted"):
-        _any_saved = False
+    # Skip auto-persist on Cloud (read-only FS, /tmp/ is ephemeral anyway).
+    # Locally, save a table only when its DataFrame is new or was replaced (a new
+    # P-mapping / polygon / AWB result) — never data that was just loaded from disk.
+    if not _is_streamlit_cloud():
+        _pids = st.session_state.setdefault("_persisted_ids", {})
         for _ss_key in TABLE_MAP:
             _df = st.session_state.get(_ss_key)
-            if _df is not None and hasattr(_df, "to_csv") and not _df.empty:
+            if _df is not None and hasattr(_df, "to_csv") and not _df.empty and _pids.get(_ss_key) != id(_df):
                 save_df(_ss_key, _df)
-                _any_saved = True
-        if _any_saved:
-            st.session_state["_duckdb_persisted"] = True
+                _pids[_ss_key] = id(_df)
 except Exception:
     pass

@@ -202,9 +202,12 @@ button:active:not(:disabled) { transform:translateY(1px); }
 
 /* in-page tabs: plain text, teal text + 4px teal underline when on */
 .stTabs [data-baseweb="tab-list"] { gap:2px; border-bottom:1px solid var(--line); }
-.stTabs [data-baseweb="tab"] { padding:10px 16px; height:auto; background:transparent; }
-.stTabs [data-baseweb="tab"] p { font-weight:600; font-size:14px; color:var(--head); }
-.stTabs [data-baseweb="tab"]:hover p, .stTabs [aria-selected="true"] p { color:var(--teal); }
+.stTabs [data-baseweb="tab-list"] { margin-bottom:6px; }
+.stTabs [data-baseweb="tab"] { padding:12px 18px; height:auto; background:transparent; }
+.stTabs [data-baseweb="tab"] p, .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p {
+  font-weight:600; font-size:14.5px; color:var(--head); }
+.stTabs [data-baseweb="tab"]:hover p, .stTabs [aria-selected="true"] p,
+.stTabs [aria-selected="true"] [data-testid="stMarkdownContainer"] p { color:var(--teal); }
 .stTabs [data-baseweb="tab-highlight"] { background:var(--teal); height:4px; border-radius:4px 4px 0 0; }
 .stTabs [data-baseweb="tab-border"] { display:none; }
 

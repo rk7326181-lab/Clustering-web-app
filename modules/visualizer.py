@@ -417,6 +417,10 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
     # FeatureGroups for clean LayerControl
     rate_label_fg = folium.FeatureGroup(name="Rate Labels", show=show_rate_labels)
     hub_fg = folium.FeatureGroup(name="Hub Markers", show=True)
+    # All polygons go into ONE GeoJSON layer (styled per feature). One folium.GeoJson per
+    # polygon made ~3.3 MB of map HTML for 882 polygons, redrawn on every visit, and put
+    # 882 unnamed "macro_element_..." entries in the layer switcher.
+    poly_features = []
 
     for _, row in df.iterrows():
         try:
@@ -452,15 +456,12 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
                 fill_color = hub_color
 
             popup = f"<b>{cc}</b><br>Hub: {hub}<br>Pincode: {pincode}<br>Rate: ₹{rate}<br>Shipments: {ships:,}<br>Price: ₹{price:,.0f}"
-            # Use GeoJson instead of Polygon so interior rings (holes in donut shapes) are rendered correctly
-            folium.GeoJson(
-                shapely_mapping(poly),
-                style_function=lambda x, fc=fill_color, hc=hub_color: {
-                    "fillColor": fc, "color": hc, "weight": 2.5, "fillOpacity": 0.45,
-                },
-                popup=folium.Popup(popup, max_width=280),
-                tooltip=f"{pincode} | ₹{price:,.0f}" if ships > 0 else f"{pincode} | ₹{rate}",
-            ).add_to(m)
+            # GeoJSON (not Polygon) so interior rings (holes in donut shapes) render correctly
+            poly_features.append({
+                "type": "Feature", "geometry": shapely_mapping(poly),
+                "properties": {"_fill": fill_color, "_line": hub_color, "_popup": popup,
+                               "_tip": f"{pincode} | ₹{price:,.0f}" if ships > 0 else f"{pincode} | ₹{rate}"},
+            })
 
             # Use representative_point so label lands inside the ring, not at the center of a hole
             rep_pt = poly.representative_point()
@@ -488,6 +489,18 @@ def create_polygon_map(polygon_df, cluster_df=None, awb_df=None, satellite=False
             import traceback
             print(f"Polygon render error for {row.get('Cluster_Code', '?')}: {e}")
             continue
+
+    if poly_features:
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": poly_features},
+            name="Polygons",
+            style_function=lambda f: {
+                "fillColor": f["properties"]["_fill"], "color": f["properties"]["_line"],
+                "weight": 2.5, "fillOpacity": 0.45,
+            },
+            popup=folium.GeoJsonPopup(fields=["_popup"], labels=False, max_width=280),
+            tooltip=folium.GeoJsonTooltip(fields=["_tip"], labels=False),
+        ).add_to(m)
 
     rate_label_fg.add_to(m)
 

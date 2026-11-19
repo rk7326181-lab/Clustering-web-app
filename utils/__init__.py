@@ -284,6 +284,25 @@ def _set_if_none(key, value):
         st.session_state[key] = value
 
 
+@st.cache_resource(max_entries=1, show_spinner=False)  # ~500 MB once parsed: keep only one file
+def _parse_geojson_shared(path, mtime):
+    """Parse a (possibly gzipped) GeoJSON file ONCE per server process and share the
+    result across sessions. The All-India file is ~90 MB of JSON: parsing it per
+    session cost seconds on every page refresh and kept one copy per user in RAM.
+    Callers only read it (_filter_geojson_to_cluster builds a new dict), so one
+    shared object is safe. `mtime` makes an edited file load fresh."""
+    if path.endswith(".gz"):
+        import gzip
+        with gzip.open(path, "rt", encoding="utf-8") as _f:
+            return json.load(_f)
+    with open(path, "r", encoding="utf-8") as _f:
+        return json.load(_f)
+
+
+def _load_geojson(path):
+    return _parse_geojson_shared(path, os.path.getmtime(path))
+
+
 def reload_from_disk():
     """Reload outputs — DuckDB first (fast), CSV fallback (slow)."""
     loaded = []
@@ -354,13 +373,7 @@ def reload_from_disk():
                   os.path.join(DATA_DIR, "geojson_boundaries.json.gz")]:
             if os.path.exists(p):
                 try:
-                    if p.endswith(".gz"):
-                        import gzip
-                        with gzip.open(p, "rt", encoding="utf-8") as _f:
-                            data = json.load(_f)
-                    else:
-                        with open(p, "r", encoding="utf-8") as _f:
-                            data = json.load(_f)
+                    data = _load_geojson(p)
                     if "features" in data:
                         st.session_state["geojson_data"] = data
                         st.session_state["upload_status"]["geojson"] = True
@@ -402,8 +415,7 @@ def reload_from_disk():
         _geo_path = _cfg.get("geojson", "")
         if _geo_path and os.path.exists(_geo_path):
             try:
-                with open(_geo_path, "r", encoding="utf-8") as _f:
-                    data = json.load(_f)
+                data = _load_geojson(_geo_path)
                 if "features" in data:
                     sample = data["features"][0].get("properties", {}) if data["features"] else {}
                     pf = None
@@ -459,8 +471,7 @@ def reload_from_disk():
 
     if st.session_state.get("geojson_data") is None and os.path.exists(_HC_GEOJSON):
         try:
-            with open(_HC_GEOJSON, "r", encoding="utf-8") as _f:
-                data = json.load(_f)
+            data = _load_geojson(_HC_GEOJSON)
             if "features" in data:
                 sample = data["features"][0].get("properties", {}) if data["features"] else {}
                 pf = None
@@ -530,6 +541,25 @@ def ensure_output_dirs():
         pass  # Read-only filesystem on Cloud
 
 
+def _download_button_takes_callable():
+    try:
+        return "callable" in (st.download_button.__doc__ or "")
+    except Exception:
+        return False
+
+
+_LAZY_DOWNLOADS = _download_button_takes_callable()
+
+
+def lazy_download_data(df, fmt="csv"):
+    """Data for st.download_button. On Streamlit versions that accept a callable, the
+    file is built only when the user clicks (a 474K-row CSV took ~1.7 s to build on
+    EVERY rerun of the page before); otherwise the bytes are built now as before."""
+    if _LAZY_DOWNLOADS:
+        return lambda: get_download_bytes(df, fmt)
+    return get_download_bytes(df, fmt)
+
+
 def get_download_bytes(df, fmt="csv"):
     if fmt == "csv":
         return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
@@ -545,7 +575,7 @@ def show_df_download(df, key, title=None):
     st.caption(f"📊 {len(df):,} rows × {len(df.columns)} columns")
     st.dataframe(df, use_container_width=True, height=350)
     st.download_button(
-        "⬇ Download CSV", get_download_bytes(df, "csv"),
+        "⬇ Download CSV", lazy_download_data(df, "csv"),
         f"{key}.csv", "text/csv", key=f"dl_{key}"
     )
 
