@@ -7,7 +7,7 @@
 # all inside their manylinux wheels.
 
 # Core app
-streamlit>=1.30.0
+streamlit>=1.50.0  # Shadowfax UI kit needs keyed containers, st.html and theme.fontFaces
 streamlit-folium==0.22.0
 folium>=0.15.0
 branca>=0.7.0

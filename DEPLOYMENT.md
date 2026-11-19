@@ -166,5 +166,5 @@ deploy\Restart-App.bat
   keep a secure backup of these two files (e.g. a password manager), since a
   fresh `git clone` won't include them.
 - If BigQuery shows "not connected", the Gmail token has likely expired
-  (~every 2 days under this workspace's policy) — see the sidebar's own
-  instructions, or run `generate_bq_token.py` and update `.streamlit\secrets.toml`.
+  (~every 2 days under this workspace's policy) — open the status button
+  (top right) for the Connections panel's instructions, or run `generate_bq_token.py` and update `.streamlit\secrets.toml`.

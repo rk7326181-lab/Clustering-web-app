@@ -1,10 +1,34 @@
+# Shadowfax UI kit theme (shadowfax.in tokens). Custom pieces such as the
+# header, hero and footer are styled in modules/ui_theme.py.
 [theme]
-primaryColor = "#0B8A7A"
-# No 'base' set — toggle Light / Dark via hamburger menu > Settings > Theme
+base = "light"
+primaryColor = "#008a71"
+backgroundColor = "#f6f8f7"
+secondaryBackgroundColor = "#f3f9f7"
+textColor = "#332f22"
+linkColor = "#008a71"
+borderColor = "#d7d7d7"
+showWidgetBorder = true
+dataframeBorderColor = "#e2e5ea"
+dataframeHeaderBackgroundColor = "#e8efec"
+baseRadius = "10px"
+buttonRadius = "9px"
+baseFontSize = 14
+font = "Montserrat, 'Segoe UI', system-ui, sans-serif"
+headingFont = "Montserrat, 'Segoe UI', system-ui, sans-serif"
+
+# Montserrat is served locally from ./static (no web fonts at runtime).
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/montserrat-latin.woff2"
+weight = "500 800"
+style = "normal"
 
 [server]
 maxUploadSize = 500
 headless = true
+# Serves ./static at app/static/... (logo + Montserrat font for the UI kit).
+enableStaticServing = true
 # IMPORTANT: do NOT set server.address / server.port here. Streamlit
 # Community Cloud manages its own port and reverse-proxy binding, and a
 # hardcoded custom port/address in this file can break the Cloud

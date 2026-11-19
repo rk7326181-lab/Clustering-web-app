@@ -15,7 +15,14 @@ try:
 except ImportError:
     pass
 
-st.set_page_config(page_title="Geo Intelligence Portal — Shadowfax", page_icon="🗺️", layout="wide", initial_sidebar_state="expanded")
+_FAVICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "shadowfax_logo.svg")
+st.set_page_config(page_title="Geo Intelligence Portal — Shadowfax",
+                   page_icon=_FAVICON if os.path.exists(_FAVICON) else "🗺️",
+                   layout="wide", initial_sidebar_state="collapsed")
+
+# Shadowfax UI kit (see modules/ui_theme.py and .streamlit/config.toml)
+from modules import ui_theme
+ui_theme.inject_css()
 
 # ═══════════════════════════════════════════════════════
 # HANDLE OAUTH CALLBACK — Must run BEFORE access control
@@ -59,24 +66,12 @@ def _check_access():
         st.session_state["authenticated"] = True
         return True
 
-    st.markdown("""
-    <style>
-    .login-box{max-width:420px;margin:80px auto;padding:40px;border-radius:16px;
-    background:linear-gradient(135deg,#0B2B26 0%,#143D36 100%);
-    box-shadow:0 20px 60px rgba(0,0,0,0.3);text-align:center}
-    .login-box h2{color:#4AEDC4;font-size:1.6rem;margin-bottom:4px}
-    .login-box p{color:#8FBCB0;font-size:0.9rem}
-    </style>
-    <div class="login-box">
-        <h2>🗺️ Geo Intelligence Portal</h2>
-        <p>Authorized access only</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    with st.form("login_form"):
-        email = st.text_input("Email", placeholder="your.name@company.com")
-        password = st.text_input("Password", type="password", placeholder="Enter app password")
-        submitted = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+    ui_theme.render_login_head()
+    with st.container(key="sfx_login"):
+        with st.form("login_form"):
+            email = st.text_input("Email", placeholder="your.name@company.com")
+            password = st.text_input("Password", type="password", placeholder="Enter app password")
+            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
 
     if submitted:
         email_ok = (not allowed_emails) or (email.strip().lower() in [e.lower() for e in allowed_emails])
@@ -99,181 +94,6 @@ if not _check_access():
     st.stop()
 
 # ═══════════════════════════════════════════════════════
-# CSS — Matching React Geo Intelligence Portal Design
-# ═══════════════════════════════════════════════════════
-st.markdown('<link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700;800&amp;family=IBM+Plex+Sans:wght@300;400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">', unsafe_allow_html=True)
-st.markdown("""<style>
-/* ══════════════════════════════════════════
-   SHADOWFAX GEO INTELLIGENCE PORTAL — V3
-   Dual-theme adaptive design. Uses Streamlit
-   CSS variables so light + dark modes both work.
-   Toggle via Settings ▸ Theme in the ☰ menu.
-   ══════════════════════════════════════════ */
-
-/* ── Theme-Adaptive Custom Properties ── */
-:root{
-  --sfx:var(--primary-color,#0B8A7A);
-  --sfx-hover:#097A6C;
-  --sfx-soft:color-mix(in srgb,var(--primary-color,#0B8A7A) 12%,var(--background-color,#F8F9FA));
-  --sfx-border:color-mix(in srgb,var(--text-color,#1A1A2E) 13%,var(--background-color,#FFFFFF));
-  --sfx-border-strong:color-mix(in srgb,var(--text-color,#1A1A2E) 22%,var(--background-color,#FFFFFF));
-  --sfx-muted:color-mix(in srgb,var(--text-color,#1A1A2E) 48%,var(--background-color,#FFFFFF));
-  --sfx-surface:var(--background-color,#FFFFFF);
-  --sfx-surface2:var(--secondary-background-color,#F1F5F9);
-  --sfx-text:var(--text-color,#1A1A2E);
-}
-
-/* ── Base ── */
-.main .block-container{padding-top:1rem;max-width:1600px}
-.stApp{font-family:'IBM Plex Sans',sans-serif}
-header[data-testid="stHeader"]{border-bottom:1px solid var(--sfx-border)}
-
-/* ── Sidebar ── */
-section[data-testid="stSidebar"]{width:280px!important}
-section[data-testid="stSidebar"] .stMarkdown p,
-section[data-testid="stSidebar"] label{font-family:'IBM Plex Sans',sans-serif;font-size:13px}
-section[data-testid="stSidebar"] .stMarkdown h1,
-section[data-testid="stSidebar"] .stMarkdown h2,
-section[data-testid="stSidebar"] .stMarkdown h3{font-family:'Work Sans',sans-serif}
-section[data-testid="stSidebar"] hr{border-color:var(--sfx-border)!important;margin:10px 0!important}
-section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p{color:var(--sfx)!important;font-weight:600;font-size:11px;letter-spacing:0.5px;text-transform:uppercase}
-section[data-testid="stSidebar"] .stRadio label{font-size:13.5px;font-weight:500;padding:5px 0;line-height:1.5}
-section[data-testid="stSidebar"] .stRadio [data-baseweb="radio"] span{color:var(--sfx)!important}
-section[data-testid="stSidebar"] .stRadio [role="radiogroup"]{gap:2px}
-section[data-testid="stSidebar"] .stTextInput input{background:var(--sfx-surface2);border:1px solid var(--sfx-border);border-radius:6px}
-section[data-testid="stSidebar"] .stButton>button{background:var(--sfx-surface2);border:1px solid var(--sfx-border);font-weight:500}
-section[data-testid="stSidebar"] .stButton>button:hover{background:var(--sfx-soft);border-color:var(--sfx);color:var(--sfx)}
-
-/* ── Sidebar Brand ── */
-.sfx-brand{display:flex;align-items:center;gap:12px;padding:14px 8px 10px}
-.sfx-brand img{height:48px;flex-shrink:0;border-radius:4px}
-.sfx-brand-text{font-size:15px;font-weight:700;color:var(--sfx-text);font-family:'Work Sans',sans-serif;letter-spacing:-0.2px;line-height:1.3}
-.sfx-brand-sub{font-size:10px;color:var(--sfx-muted);font-weight:500;letter-spacing:0.8px;text-transform:uppercase;margin-top:2px}
-
-/* ── Sidebar Badges ── */
-.sfx-badge{padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;text-align:center;display:flex;align-items:center;justify-content:center;gap:6px}
-.sfx-badge .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
-.sfx-badge--ok{background:var(--sfx-soft);color:var(--sfx);border:1px solid var(--sfx)}
-.sfx-badge--ok .dot{background:var(--sfx)}
-.sfx-badge--warn{background:color-mix(in srgb,#F59E0B 12%,var(--sfx-surface));color:#D97706;border:1px solid #F59E0B}
-.sfx-badge--warn .dot{background:#F59E0B}
-
-/* ── Sidebar Labels / Status ── */
-.sfx-label{font-size:11px;color:var(--sfx);font-weight:700;letter-spacing:1.2px;margin:8px 0 4px}
-.sfx-status{display:flex;align-items:center;gap:8px;padding:2px 0}
-.sfx-status .icon{font-size:12px;font-weight:700}
-.sfx-status .lbl{font-size:12px;font-family:'IBM Plex Sans',sans-serif}
-.sfx-status--done .icon{color:var(--sfx)}
-.sfx-status--done .lbl{color:var(--sfx-text)}
-.sfx-status--pending .icon{color:var(--sfx-border-strong)}
-.sfx-status--pending .lbl{color:var(--sfx-muted)}
-.sfx-footer{text-align:center;font-size:10px;color:var(--sfx-muted);padding:8px 0 12px;font-family:'IBM Plex Sans',sans-serif}
-
-/* ── Sidebar Chat ── */
-.sfx-chat-user{background:var(--sfx);color:#FFF;padding:6px 10px;border-radius:8px;margin:4px 0;font-size:12px;text-align:right}
-.sfx-chat-bot{background:var(--sfx-surface2);color:var(--sfx-text);padding:6px 10px;border-radius:8px;margin:4px 0;font-size:12px;border:1px solid var(--sfx-border)}
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"]{gap:2px;border-bottom:2px solid var(--sfx-border);border-radius:8px 8px 0 0;padding:0 4px}
-.stTabs [data-baseweb="tab"]{padding:10px 22px;font-weight:600;font-size:13px;color:var(--sfx-muted);border-radius:6px 6px 0 0;border:none;font-family:'Work Sans',sans-serif;letter-spacing:0.02em}
-.stTabs [aria-selected="true"]{background:var(--sfx-soft)!important;color:var(--sfx)!important;border-bottom:3px solid var(--sfx)!important;font-weight:700}
-.stTabs [data-baseweb="tab"]:hover{color:var(--sfx)!important}
-
-/* ── Buttons ── */
-.stButton>button{border:1.5px solid var(--sfx);color:var(--sfx);background:var(--sfx-surface);font-weight:600;border-radius:8px;font-family:'IBM Plex Sans',sans-serif;font-size:13px;padding:8px 20px;transition:background .15s ease,color .15s ease,box-shadow .15s ease}
-.stButton>button:hover{background:var(--sfx);color:#FFF;box-shadow:0 2px 8px rgba(11,138,122,.2)}
-button[kind="primary"]{background:var(--sfx)!important;color:#FFF!important;border:none!important;font-weight:700!important;border-radius:8px!important}
-button[kind="primary"]:hover{background:var(--sfx-hover)!important;box-shadow:0 3px 12px rgba(11,138,122,.3)!important}
-.stDownloadButton>button{border:1.5px solid var(--sfx);color:var(--sfx);background:var(--sfx-surface);font-weight:600;border-radius:6px;font-size:12px}
-.stDownloadButton>button:hover{background:var(--sfx);color:#FFF}
-
-/* ── Metrics ── */
-div[data-testid="stMetricValue"]{font-size:1.5rem;font-weight:700;font-family:'Work Sans',sans-serif}
-div[data-testid="stMetricLabel"]{font-size:12px;color:var(--sfx-muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
-
-/* ── Data Tables ── */
-.stDataFrame{border:1px solid var(--sfx-border);border-radius:8px;overflow:hidden}
-[data-testid="stDataFrameResizable"]{border-radius:8px}
-[data-testid="stDataFrame"] [data-testid="glideDataEditor"]{--gdg-bg-header:var(--sfx-surface2);--gdg-bg-header-has-focus:var(--sfx-border);--gdg-text-header:var(--sfx-text);--gdg-bg-cell:var(--sfx-surface);--gdg-text-dark:var(--sfx-text);--gdg-text-medium:var(--sfx-muted);--gdg-border-color:var(--sfx-border);--gdg-bg-header-hovered:var(--sfx-border);--gdg-accent-color:var(--sfx);--gdg-accent-light:var(--sfx-soft);--gdg-link-color:var(--sfx)}
-[data-testid="stDataEditor"] [data-testid="glideDataEditor"]{--gdg-bg-header:var(--sfx-surface2);--gdg-bg-header-has-focus:var(--sfx-border);--gdg-text-header:var(--sfx-text);--gdg-bg-cell:var(--sfx-surface);--gdg-text-dark:var(--sfx-text);--gdg-border-color:var(--sfx-border);--gdg-accent-color:var(--sfx)}
-
-/* ── Custom Classes ── */
-.sfx-header{background:var(--sfx);color:#FFF;padding:14px 24px;border-radius:10px;font-family:'Work Sans',sans-serif;font-size:17px;font-weight:700;margin:16px 0 10px;letter-spacing:-0.3px}
-.sfx-card{background:var(--sfx-surface);border:1px solid var(--sfx-border);border-radius:12px;padding:20px;margin:8px 0;box-shadow:0 1px 3px rgba(0,0,0,.04);color:var(--sfx-text)}
-.sfx-ok{background:var(--sfx-soft);border-left:4px solid var(--sfx);padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;color:var(--sfx-text);font-size:14px}
-.sfx-warn{background:color-mix(in srgb,#F59E0B 10%,var(--sfx-surface));border-left:4px solid #F59E0B;padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;color:var(--sfx-text)}
-.sfx-err{background:color-mix(in srgb,#EF4444 10%,var(--sfx-surface));border-left:4px solid #EF4444;padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;color:var(--sfx-text)}
-.sfx-section-header{font-family:'Work Sans',sans-serif;font-size:15px;font-weight:700;color:var(--sfx-text);margin:16px 0 8px;padding-bottom:6px;border-bottom:2px solid var(--sfx-border)}
-
-/* ── Step Pills ── */
-.step-pills{display:flex;gap:8px;padding:10px 0;flex-wrap:wrap}
-.step-pill{display:inline-flex;align-items:center;gap:6px;padding:7px 16px;border-radius:20px;font-size:12px;font-weight:600;font-family:'Work Sans',sans-serif;letter-spacing:.02em}
-.step-pill.idle{background:var(--sfx-surface);color:var(--sfx-muted);border:1px solid var(--sfx-border)}
-.step-pill.complete{background:var(--sfx-soft);color:var(--sfx);border:1px solid var(--sfx)}
-.step-pill.active{background:var(--sfx);color:#FFF;border:1px solid var(--sfx)}
-
-/* ── KPI Cards ── */
-.kpi-row{display:flex;gap:14px;margin:12px 0 24px;flex-wrap:wrap}
-.kpi-card{flex:1;min-width:150px;background:var(--sfx-surface);border:1px solid var(--sfx-border);border-radius:12px;padding:20px 24px;text-align:center;position:relative;overflow:hidden}
-.kpi-card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px}
-.kpi-card .kpi-label{font-size:11px;color:var(--sfx-muted);font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px}
-.kpi-card .kpi-value{font-size:26px;color:var(--sfx-text);font-weight:800;font-family:'Work Sans',sans-serif;letter-spacing:-0.5px;line-height:1}
-.kpi-card.green .kpi-value{color:var(--sfx)}
-.kpi-card.green::before{background:var(--sfx)}
-.kpi-card.red .kpi-value{color:#EF4444}
-.kpi-card.red::before{background:#EF4444}
-.kpi-card.blue .kpi-value{color:#3B82F6}
-.kpi-card.blue::before{background:#3B82F6}
-.kpi-card.purple .kpi-value{color:#7C3AED}
-.kpi-card.purple::before{background:#7C3AED}
-.kpi-card.orange .kpi-value{color:#F97316}
-.kpi-card.orange::before{background:#F97316}
-
-/* ── Chat Bubbles (main content) ── */
-.chat-user{background:var(--sfx);color:#FFF;padding:10px 16px;border-radius:12px 12px 4px 12px;margin:6px 0;text-align:right;font-size:14px;max-width:80%;margin-left:auto}
-.chat-assistant{background:var(--sfx-surface);border:1px solid var(--sfx-border);color:var(--sfx-text);padding:10px 16px;border-radius:12px 12px 12px 4px;margin:6px 0;font-size:14px;max-width:85%;line-height:1.6}
-
-/* ── Log Entries ── */
-.log-entry{display:flex;align-items:flex-start;gap:8px;padding:6px 10px;font-size:12px;font-family:'IBM Plex Mono',monospace;border-bottom:1px solid var(--sfx-border)}
-.log-dot{width:8px;height:8px;border-radius:50%;margin-top:4px;flex-shrink:0}
-.log-info .log-dot{background:var(--sfx-muted)}
-.log-success .log-dot{background:var(--sfx)}
-.log-warning .log-dot{background:#F59E0B}
-.log-error .log-dot{background:#EF4444}
-.log-time{color:var(--sfx-muted);font-size:11px;flex-shrink:0}
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar{width:6px}
-::-webkit-scrollbar-track{background:var(--sfx-surface)}
-::-webkit-scrollbar-thumb{background:var(--sfx-border-strong);border-radius:3px}
-
-/* ── Expanders ── */
-[data-testid="stExpander"]{border:1px solid var(--sfx-border);border-radius:10px}
-[data-testid="stExpanderToggle"] p{font-weight:600;font-size:14px}
-
-/* ── File Uploaders ── */
-[data-testid="stFileUploader"]{border:2px dashed var(--sfx-border-strong);border-radius:10px}
-[data-testid="stFileUploader"]:hover{border-color:var(--sfx)}
-
-/* ── Selectbox / Inputs ── */
-.stSelectbox [data-baseweb="select"]>div{border-radius:8px}
-.stSelectbox [data-baseweb="select"]>div:hover{border-color:var(--sfx)}
-.stMultiSelect [data-baseweb="select"]>div{border-radius:8px}
-.stMultiSelect [data-baseweb="tag"]{background:var(--sfx-soft);color:var(--sfx);border-radius:4px}
-.stTextInput input{border-radius:8px}
-.stTextInput input:focus{border-color:var(--sfx);box-shadow:0 0 0 1px var(--sfx)}
-.stNumberInput input{border-radius:8px;font-weight:600;font-size:15px}
-.stNumberInput input:focus{border-color:var(--sfx);box-shadow:0 0 0 1px var(--sfx)}
-
-/* ── Sidebar Button Override ── */
-section[data-testid="stSidebar"] button[kind="primary"]{background:var(--sfx)!important;color:#FFF!important;border-radius:8px!important;font-size:12px!important}
-
-/* ── Alerts / Progress / Spinner ── */
-[data-testid="stAlert"]{border-radius:8px;font-size:13px}
-.stProgress>div>div{background:var(--sfx)!important;border-radius:4px}
-</style>""", unsafe_allow_html=True)
-
-# ═══════════════════════════════════════════════════════
 # Session State + BQ Auto-connect
 # ═══════════════════════════════════════════════════════
 from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
@@ -287,6 +107,13 @@ from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
 
 init_session_state()
 ensure_output_dirs()
+
+def html_block(markup):
+    """Render multi-line HTML via st.markdown safely: strip indentation and blank lines so
+    Markdown never turns part of it into a code block (an empty optional tile left a blank
+    line, after which the remaining indented <div>s showed as raw code)."""
+    st.markdown("".join(line.strip() for line in markup.splitlines()), unsafe_allow_html=True)
+
 
 def kpi_row(cards):
     """cards: list of (label, value, color_class) tuples. color_class: blue|green|red|purple|orange"""
@@ -401,7 +228,7 @@ def _regenerate_hub_image(hub_name, poly_df, cluster_df, hub_col):
             _add_map_backdrop(ax)
         else:
             ax.plot(hlon, hlat, "r^", markersize=14, zorder=5)
-        ax.set_title(hub_name, fontsize=14, fontweight="bold", color="#0B8A7A")
+        ax.set_title(hub_name, fontsize=14, fontweight="bold", color="#008a71")
         ax.set_axis_off()
         path = os.path.join(HUB_IMG_DIR, f"{hub_name.replace(' ', '_').replace('/', '_')}_Full_View.png")
         plt.savefig(path, dpi=200, bbox_inches="tight", facecolor="white", pad_inches=0.1)
@@ -426,194 +253,28 @@ if loaded:
         add_log(f"Auto-loaded: {f}", "success")
 
 # ═══════════════════════════════════════════════════════
-# SIDEBAR
+# HEADER — Shadowfax UI kit: logo · portal name · step tabs · status button.
+# Sign-in, keys and pipeline status live in the Connections panel behind the
+# status button (never on a tab), so every tab stays clean.
 # ═══════════════════════════════════════════════════════
-# Load Shadowfax logo
-import base64
-
-@st.cache_data(show_spinner=False)
-def _load_logo():
-    logo_path = os.path.join(os.path.dirname(__file__), "shadowfax_logo.jpeg")
-    if os.path.exists(logo_path):
-        with open(logo_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-        return f"data:image/jpeg;base64,{b64}"
-    return "https://www.shadowfax.in/wp-content/uploads/2023/10/Logo-1.svg"
-
-_logo_src = _load_logo()
-
-st.sidebar.markdown(f"""<div class="sfx-brand">
-<img src="{_logo_src}">
-<div>
-<div class="sfx-brand-text">Geo Intelligence Portal</div>
-<div class="sfx-brand-sub">Shadowfax Technologies</div>
-</div>
-</div>""", unsafe_allow_html=True)
-
-# ── Dark Mode Toggle ──
-_dark = st.sidebar.toggle("🌙 Dark Mode", value=st.session_state.get("dark_mode", False), key="dark_mode_toggle")
-st.session_state["dark_mode"] = _dark
-if _dark:
-    st.markdown("""<style>
-    /* ── DARK MODE OVERRIDES ── */
-    :root{--background-color:#0E1117!important;--secondary-background-color:#262730!important;--text-color:#FAFAFA!important}
-    .stApp{background:#0E1117!important;color:#FAFAFA!important}
-    header[data-testid="stHeader"]{background:#0E1117!important;border-color:#333!important}
-    section[data-testid="stSidebar"]{background:#262730!important;border-color:#333!important}
-    section[data-testid="stSidebar"]>div:first-child{background:#262730!important}
-    /* Inputs & Selects */
-    [data-baseweb="select"]>div{background:#1E1E2E!important;color:#FAFAFA!important;border-color:#444!important}
-    [data-baseweb="input"] input,.stTextInput input,.stNumberInput input{background:#1E1E2E!important;color:#FAFAFA!important;border-color:#444!important}
-    [data-baseweb="popover"]>div{background:#262730!important;color:#FAFAFA!important}
-    [data-baseweb="menu"]{background:#262730!important}
-    [data-baseweb="menu"] li{color:#FAFAFA!important}
-    [data-baseweb="menu"] li:hover{background:#333!important}
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"]{background:#1E1E2E!important;border-color:#333!important}
-    .stTabs [data-baseweb="tab"]{color:#999!important}
-    /* Expanders */
-    [data-testid="stExpander"]{background:#1E1E2E!important;border-color:#333!important}
-    /* File uploader */
-    [data-testid="stFileUploader"]{background:#1E1E2E!important;border-color:#444!important}
-    [data-testid="stFileUploadDropzone"]{background:#1E1E2E!important;color:#FAFAFA!important}
-    /* Data grid */
-    [data-testid="stDataFrame"]{background:#0E1117!important;border-color:#333!important}
-    [data-testid="stDataFrame"] [data-testid="glideDataEditor"]{--gdg-bg-header:#1E1E2E!important;--gdg-bg-cell:#0E1117!important;--gdg-text-dark:#FAFAFA!important;--gdg-text-header:#CCC!important;--gdg-border-color:#333!important;--gdg-text-medium:#AAA!important;--gdg-bg-cell-medium:#151520!important;--gdg-accent-light:#1A2730!important}
-    [data-testid="stDataEditor"]{background:#0E1117!important;border-color:#333!important}
-    [data-testid="stDataEditor"] [data-testid="glideDataEditor"]{--gdg-bg-header:#1E1E2E!important;--gdg-bg-cell:#0E1117!important;--gdg-text-dark:#FAFAFA!important;--gdg-text-header:#CCC!important;--gdg-border-color:#333!important;--gdg-bg-cell-medium:#151520!important}
-    /* DataFrame wrapper & canvas */
-    [data-testid="stDataFrame"]>div{background:#0E1117!important}
-    [data-testid="stDataFrameResizable"]{background:#0E1117!important;border-color:#333!important}
-    /* HTML tables fallback */
-    .stApp table{background:#0E1117!important;color:#FAFAFA!important}
-    .stApp table th{background:#1E1E2E!important;color:#CCC!important;border-color:#333!important}
-    .stApp table td{background:#0E1117!important;color:#FAFAFA!important;border-color:#333!important}
-    /* Dataframe search/filter */
-    [data-testid="stDataFrame"] input{background:#1E1E2E!important;color:#FAFAFA!important;border-color:#444!important}
-    /* Buttons — keep teal, adjust bg */
-    .stButton>button{background:#1E1E2E!important;border-color:var(--sfx)!important;color:var(--sfx)!important}
-    .stButton>button:hover{background:var(--sfx)!important;color:#FFF!important}
-    section[data-testid="stSidebar"] .stButton>button{background:#333!important;border-color:#444!important;color:#DDD!important}
-    section[data-testid="stSidebar"] .stButton>button:hover{background:var(--sfx)!important;color:#FFF!important;border-color:var(--sfx)!important}
-    /* Labels, captions, markdown text */
-    .stMarkdown, .stMarkdown p, label, .stCaption, [data-testid="stWidgetLabel"]{color:#FAFAFA!important}
-    section[data-testid="stSidebar"] .stMarkdown p,section[data-testid="stSidebar"] label{color:#DDD!important}
-    /* Metric values */
-    div[data-testid="stMetricValue"]{color:#FAFAFA!important}
-    /* Toggle itself */
-    [data-testid="stToggle"] label span:last-child{color:#DDD!important}
-    /* Radio in sidebar */
-    section[data-testid="stSidebar"] .stRadio label{color:#DDD!important}
-    /* Alert overrides */
-    [data-testid="stAlert"]{background:#1E1E2E!important;color:#FAFAFA!important}
-    /* Scrollbar */
-    ::-webkit-scrollbar-track{background:#0E1117!important}
-    ::-webkit-scrollbar-thumb{background:#444!important}
-    /* Warning badge fix for dark */
-    .sfx-badge--warn{color:#FCD34D!important}
-    /* Multiselect tags */
-    .stMultiSelect [data-baseweb="tag"]{background:#1A2730!important;color:var(--sfx)!important}
-    /* Download button */
-    .stDownloadButton>button{background:#1E1E2E!important;border-color:var(--sfx)!important;color:var(--sfx)!important}
-    .stDownloadButton>button:hover{background:var(--sfx)!important;color:#FFF!important}
-    /* Column config panel */
-    [data-testid="stColumnConfigDialog"]{background:#262730!important;color:#FAFAFA!important}
-    /* Progress bar track */
-    .stProgress>div{background:#262730!important}
-    /* Tooltips */
-    [data-baseweb="tooltip"]>div{background:#262730!important;color:#FAFAFA!important}
-    /* KPI cards in dark */
-    .kpi-card{background:#1E1E2E!important;border-color:#333!important}
-    .kpi-card .kpi-label{color:#AAA!important}
-    .kpi-card .kpi-value{color:#FAFAFA!important}
-    .kpi-card.green .kpi-value{color:var(--sfx)!important}
-    .kpi-card.red .kpi-value{color:#EF4444!important}
-    .kpi-card.blue .kpi-value{color:#60A5FA!important}
-    .kpi-card.purple .kpi-value{color:#A78BFA!important}
-    .kpi-card.orange .kpi-value{color:#FB923C!important}
-    /* Custom card classes */
-    .sfx-card{background:#1E1E2E!important;border-color:#333!important;color:#FAFAFA!important}
-    .sfx-ok{background:#0E2420!important;color:#FAFAFA!important}
-    .sfx-warn{background:#1E1A0E!important;color:#FAFAFA!important}
-    .sfx-err{background:#1E0E0E!important;color:#FAFAFA!important}
-    .sfx-section-header{color:#FAFAFA!important;border-color:#333!important}
-    /* Step pills */
-    .step-pill.idle{background:#1E1E2E!important;color:#888!important;border-color:#333!important}
-    .step-pill.complete{background:#0E2420!important}
-    /* Chat */
-    .chat-assistant{background:#1E1E2E!important;border-color:#333!important;color:#FAFAFA!important}
-    .sfx-chat-bot{background:#1E1E2E!important;border-color:#333!important;color:#FAFAFA!important}
-    /* Log entries */
-    .log-entry{border-color:#333!important}
-    </style>""", unsafe_allow_html=True)
-
-st.sidebar.markdown('<hr>', unsafe_allow_html=True)
-
-# BigQuery Connection Status
-bq_mode = st.session_state.get("bq_auth_mode")
-if bq_mode in ("adc", "google_oauth", "service_account"):
-    mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account", "streamlit_secrets": "Cloud Secrets"}.get(bq_mode, bq_mode)
-    st.sidebar.markdown(f'<div class="sfx-badge sfx-badge--ok"><span class="dot"></span>BigQuery Connected ({mode_label})</div>', unsafe_allow_html=True)
-    if bq_mode == "google_oauth":
-        if st.sidebar.button("Logout Google", key="bq_logout"):
-            from modules.bigquery_client import clear_oauth_credentials
-            clear_oauth_credentials()
-            st.session_state["bq_client"] = None
-            st.session_state["bq_auth_mode"] = "needs_key"
-            st.rerun()
-else:
-    st.sidebar.markdown('<div class="sfx-badge sfx-badge--warn"><span class="dot"></span>BigQuery: Connect Below</div>', unsafe_allow_html=True)
-    st.sidebar.markdown('<div class="sfx-label">GOOGLE ACCOUNT</div>', unsafe_allow_html=True)
-
-    # Show OAuth error from callback if any
-    _oauth_err = st.session_state.pop("_oauth_error", None)
-    if _oauth_err:
-        st.sidebar.error(f"Google sign-in failed: {_oauth_err}")
-
-    # Web OAuth flow (for Streamlit Cloud)
-    from modules.bigquery_client import get_google_auth_url
-    _is_cloud = os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true"
-    _auth_url, _auth_state = get_google_auth_url()
-    if _auth_url:
-        st.sidebar.link_button("🔐 Sign in with Google", _auth_url, type="primary", use_container_width=True)
-        st.sidebar.caption("Redirects to Google for sign-in. No JSON key needed. "
-                           "If sign-in fails mid-way with a connection error (accounts.youtube.com), "
-                           "your network is blocking Google's sign-in chain — switch networks or "
-                           "upload a Service Account key below instead.")
-    elif _is_cloud:
-        # No usable web OAuth client on Cloud — show the working recovery path
-        st.sidebar.warning(
-            "Google sign-in from the deployed app needs a 'Web application' OAuth client "
-            "(GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in secrets, with this app's URL as an "
-            "authorized redirect URI in Google Cloud Console).\n\n"
-            "**Easier:** on your computer run `python generate_bq_token.py` from the repo, "
-            "sign in with your Google account, then paste the generated block into this app's "
-            "**Settings → Secrets** — the app will then connect automatically every time."
-        )
-    else:
-        # Fallback: local OAuth (desktop — run_local_server) — only works on local machines
-        if st.sidebar.button("Login with Google", key="google_oauth_btn", type="primary"):
-            from modules.bigquery_client import handle_google_oauth_login
-            with st.sidebar.spinner("Opening Google login..."):
-                ok, err = handle_google_oauth_login()
-            if ok:
-                add_log("BigQuery connected via Google OAuth", "success")
-                st.rerun()
-            else:
-                st.sidebar.error(f"{err}")
-        st.sidebar.caption("Opens browser for sign-in. No JSON key needed.")
-    st.sidebar.markdown('<div class="sfx-label">SERVICE ACCOUNT</div>', unsafe_allow_html=True)
-    sa_file = st.sidebar.file_uploader("Upload JSON key", type=["json"], key="sidebar_sa_upload")
-    if sa_file:
-        from modules.bigquery_client import handle_service_account_upload
-        ok, err = handle_service_account_upload(sa_file)
-        if ok:
-            add_log("BigQuery connected via Service Account", "success")
-            st.rerun()
-        else:
-            st.sidebar.error(f"{err}")
-
-st.sidebar.markdown('<hr>', unsafe_allow_html=True)
+NAV_STEPS = [
+    "1. Data Ingestion",
+    "2. P Mapping",
+    "3. Polygon Gen + Editor",
+    "4. AWB + Visualisation",
+    "5. Financial Intelligence",
+    "6. AI Agent",
+    "7. My Maps Polygons",
+]
+NAV_LABELS = {
+    "1. Data Ingestion": "Data Ingestion",
+    "2. P Mapping": "P Mapping",
+    "3. Polygon Gen + Editor": "Polygons",
+    "4. AWB + Visualisation": "AWB Analysis",
+    "5. Financial Intelligence": "Financials",
+    "6. AI Agent": "AI Agent",
+    "7. My Maps Polygons": "My Maps",
+}
 
 # Groq API key — loaded from secrets/env, never shown or copied by users.
 # Uses the same robust resolver as ai_agent.py (handles multiple secret name variants).
@@ -626,38 +287,16 @@ if not st.session_state.get("groq_api_key"):
     except Exception:
         pass
 
-# Show status only — key is never displayed or editable
-if st.session_state.get("groq_api_key"):
-    st.sidebar.markdown('<div class="sfx-badge sfx-badge--ok"><span class="dot"></span>AI Agent Ready</div>', unsafe_allow_html=True)
+bq_mode = st.session_state.get("bq_auth_mode")
+_bq_ok = bq_mode in ("adc", "google_oauth", "service_account")
+_ai_ok = bool(st.session_state.get("groq_api_key"))
+if _bq_ok and _ai_ok:
+    _conn_state, _conn_text = "ok", "Connected"
+elif _bq_ok:
+    _conn_state, _conn_text = "warn", "AI key missing"
 else:
-    st.sidebar.markdown(
-        '<div class="sfx-badge sfx-badge--warn"><span class="dot"></span>AI Agent Key Missing</div>'
-        '<div style="font-size:10px;color:var(--sfx-muted);margin-top:4px;line-height:1.3">'
-        'Add <b>GROQ_API_KEY</b> to Streamlit Cloud secrets. '
-        'Place it at the <b>top</b> of the secrets file, '
-        '<b>above</b> any <code>[section]</code> header, '
-        'or TOML will nest it inside the previous section.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    _conn_state, _conn_text = "bad", "Connect BigQuery"
 
-st.sidebar.markdown('<hr>', unsafe_allow_html=True)
-
-# Navigation
-nav = st.sidebar.radio("NAVIGATE", [
-    "1. Data Ingestion",
-    "2. P Mapping",
-    "3. Polygon Gen + Editor",
-    "4. AWB + Visualisation",
-    "5. Financial Intelligence",
-    "6. AI Agent",
-    "7. My Maps Polygons",
-], index=0, key="nav")
-
-st.sidebar.markdown('<hr>', unsafe_allow_html=True)
-
-# Pipeline Status
-st.sidebar.markdown('<div class="sfx-label">PIPELINE STATUS</div>', unsafe_allow_html=True)
 status = st.session_state["upload_status"]
 steps = [
     ("Cluster CSV", status["cluster"]),
@@ -669,85 +308,216 @@ steps = [
     ("AWB Data", st.session_state.get("awb_raw_df") is not None),
     ("P&L Results", st.session_state.get("final_result_df") is not None),
 ]
-for label, done in steps:
-    cls = "sfx-status--done" if done else "sfx-status--pending"
-    icon = "✓" if done else "○"
-    st.sidebar.markdown(f'<div class="sfx-status {cls}"><span class="icon">{icon}</span><span class="lbl">{label}</span></div>', unsafe_allow_html=True)
 
-# ── Clear Cache Button ──
-st.sidebar.markdown('<hr>', unsafe_allow_html=True)
-if st.sidebar.button("Clear All Cache", key="clear_cache"):
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    try:
-        from modules.duckdb_store import drop_all
-        drop_all()
-    except Exception:
-        pass
-    for cache_key in ["_pip_awb_stats", "_pip_data_id", "_hub_pin_counts_cache", "_ms_hex_cache"]:
-        st.session_state.pop(cache_key, None)
-    add_log("All caches cleared", "warning")
-    st.rerun()
+with st.container(key="sfx_top"):
+    _hc1, _hc2, _hc3 = st.columns([1, 6, 1], vertical_alignment="center", gap="small")
+    with _hc1:
+        st.markdown(ui_theme.brand_html(), unsafe_allow_html=True)
+    with _hc2:
+        nav = st.radio("Navigate", NAV_STEPS, index=0, key="nav", horizontal=True,
+                       format_func=lambda v: NAV_LABELS.get(v, v), label_visibility="collapsed")
+    with _hc3:
+        with st.container(key=f"sfx_conn_{_conn_state}"):
+            _drawer = st.popover(_conn_text)
 
-# ── Sidebar AI Chat (accessible from all steps) ──
-st.sidebar.markdown('<hr>', unsafe_allow_html=True)
-with st.sidebar.expander("🤖 AI Assistant", expanded=False):
-    if "sidebar_chat_history" not in st.session_state:
-        st.session_state["sidebar_chat_history"] = []
+with _drawer:
+    st.markdown('<div class="sfx-dh"><b>Connections</b>'
+                '<span>Sign in to BigQuery, check the AI key and see what is loaded.</span></div>',
+                unsafe_allow_html=True)
 
-    # Show recent chat messages (last 6)
-    for msg in st.session_state["sidebar_chat_history"][-6:]:
-        if msg["role"] == "user":
-            st.markdown(f'<div class="sfx-chat-user">{msg["content"]}</div>', unsafe_allow_html=True)
+    # ── 1 · BigQuery ──
+    st.markdown('<div class="sfx-dsec first">1 · BigQuery</div>', unsafe_allow_html=True)
+    if _bq_ok:
+        mode_label = {"adc": "Local Auth", "google_oauth": "Google Account", "service_account": "Service Account", "streamlit_secrets": "Cloud Secrets"}.get(bq_mode, bq_mode)
+        st.markdown(f'<div class="sfx-badge sfx-badge--ok"><span class="dot"></span>Connected ({mode_label})</div>', unsafe_allow_html=True)
+        if bq_mode == "google_oauth":
+            if st.button("Log out of Google", key="bq_logout"):
+                from modules.bigquery_client import clear_oauth_credentials
+                clear_oauth_credentials()
+                st.session_state["bq_client"] = None
+                st.session_state["bq_auth_mode"] = "needs_key"
+                st.rerun()
+    else:
+        st.markdown('<div class="sfx-badge sfx-badge--warn"><span class="dot"></span>Not connected. Sign in below.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sfx-label">Google account</div>', unsafe_allow_html=True)
+
+        # Show OAuth error from callback if any
+        _oauth_err = st.session_state.pop("_oauth_error", None)
+        if _oauth_err:
+            st.error(f"Google sign-in failed: {_oauth_err}")
+
+        # Web OAuth flow (for Streamlit Cloud)
+        from modules.bigquery_client import get_google_auth_url
+        _is_cloud = os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true"
+        _auth_url, _auth_state = get_google_auth_url()
+        if _auth_url:
+            st.link_button("Sign in with Google", _auth_url, type="primary", use_container_width=True)
+            st.caption("Takes you to Google to sign in. No JSON key needed. "
+                       "If sign-in stops with a connection error (accounts.youtube.com), "
+                       "your network is blocking Google's sign-in. Switch networks, or "
+                       "upload a service account key below instead.")
+        elif _is_cloud:
+            # No usable web OAuth client on Cloud — show the working recovery path
+            st.warning(
+                "Google sign-in from the deployed app needs a 'Web application' OAuth client "
+                "(GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in secrets, with this app's URL as an "
+                "authorized redirect URI in Google Cloud Console).\n\n"
+                "**Easier:** on your computer run `python generate_bq_token.py` from the repo, "
+                "sign in with your Google account, then paste the generated block into this app's "
+                "**Settings → Secrets** — the app will then connect automatically every time."
+            )
         else:
-            st.markdown(f'<div class="sfx-chat-bot">{msg["content"][:300]}{"..." if len(msg["content"]) > 300 else ""}</div>', unsafe_allow_html=True)
+            # Fallback: local OAuth (desktop — run_local_server) — only works on local machines
+            if st.button("Log in with Google", key="google_oauth_btn", type="primary"):
+                from modules.bigquery_client import handle_google_oauth_login
+                with st.spinner("Opening Google login..."):
+                    ok, err = handle_google_oauth_login()
+                if ok:
+                    add_log("BigQuery connected via Google OAuth", "success")
+                    st.rerun()
+                else:
+                    st.error(f"{err}")
+            st.caption("Opens your browser to sign in. No JSON key needed.")
+        st.markdown('<div class="sfx-label">Service account</div>', unsafe_allow_html=True)
+        sa_file = st.file_uploader("Upload JSON key", type=["json"], key="sidebar_sa_upload")
+        if sa_file:
+            from modules.bigquery_client import handle_service_account_upload
+            ok, err = handle_service_account_upload(sa_file)
+            if ok:
+                add_log("BigQuery connected via Service Account", "success")
+                st.rerun()
+            else:
+                st.error(f"{err}")
 
-    # Quick action buttons
-    quick_cols = st.columns(2)
-    with quick_cols[0]:
-        if st.button("▶ Run Pipeline", key="sidebar_run_pipeline", use_container_width=True):
-            st.session_state["auto_run_requested"] = True
-            st.rerun()
-    with quick_cols[1]:
-        if st.button("📊 Status", key="sidebar_status", use_container_width=True):
-            from modules.ai_agent import build_app_context
-            ctx = build_app_context(st.session_state)
-            st.session_state["sidebar_chat_history"].append({"role": "user", "content": "Show pipeline status"})
-            st.session_state["sidebar_chat_history"].append({"role": "assistant", "content": ctx})
-            st.rerun()
+    # ── 2 · AI agent ── (status only — key is never displayed or editable)
+    st.markdown('<div class="sfx-dsec">2 · AI agent</div>', unsafe_allow_html=True)
+    if _ai_ok:
+        st.markdown('<div class="sfx-badge sfx-badge--ok"><span class="dot"></span>AI agent ready</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="sfx-badge sfx-badge--warn"><span class="dot"></span>AI key missing</div>'
+            '<div class="muted" style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.45">'
+            'Add <b>GROQ_API_KEY</b> to the Streamlit Cloud secrets. '
+            'Put it at the <b>top</b> of the secrets file, '
+            '<b>above</b> any <code>[section]</code> header, '
+            'or TOML will nest it inside the previous section.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-    # Chat input
-    sidebar_q = st.text_input("Ask anything...", key="sidebar_ai_q", placeholder="What should I do next?")
-    if sidebar_q and st.button("Send", key="sidebar_ai_send"):
-        from modules.ai_agent import app_agent_chat
-        api_key = st.session_state.get("groq_api_key")
-        answer = app_agent_chat(sidebar_q, st.session_state, st.session_state["sidebar_chat_history"], api_key)
-        st.session_state["sidebar_chat_history"].append({"role": "user", "content": sidebar_q})
-        st.session_state["sidebar_chat_history"].append({"role": "assistant", "content": answer})
+    # ── 3 · Pipeline status ──
+    st.markdown(f'<div class="sfx-dsec">3 · Pipeline <span style="color:var(--muted);font-weight:600">'
+                f'({sum(1 for _, d in steps if d)} of {len(steps)} ready)</span></div>', unsafe_allow_html=True)
+    _checks = "".join(
+        f'<div class="sfx-status {"sfx-status--done" if done else "sfx-status--pending"}">'
+        f'<span class="icon">✓</span><span class="lbl">{label}</span></div>'
+        for label, done in steps)
+    st.markdown(f'<div class="sfx-checks">{_checks}</div>', unsafe_allow_html=True)
+
+    # ── 4 · Tools ──
+    st.markdown('<div class="sfx-dsec">4 · Tools</div>', unsafe_allow_html=True)
+    if st.button("Clear all cache", key="clear_cache",
+                 help="Forgets cached results and the local DuckDB copy. Your files on disk are kept."):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        try:
+            from modules.duckdb_store import drop_all
+            drop_all()
+        except Exception:
+            pass
+        for cache_key in ["_pip_awb_stats", "_pip_data_id", "_hub_pin_counts_cache", "_ms_hex_cache"]:
+            st.session_state.pop(cache_key, None)
+        add_log("All caches cleared", "warning")
         st.rerun()
 
-st.sidebar.markdown('<div class="sfx-footer">© 2026 Shadowfax Technologies</div>', unsafe_allow_html=True)
+    # ── AI assistant (reachable from every tab) ──
+    with st.expander("AI assistant", expanded=False):
+        if "sidebar_chat_history" not in st.session_state:
+            st.session_state["sidebar_chat_history"] = []
+
+        # Show recent chat messages (last 6)
+        for msg in st.session_state["sidebar_chat_history"][-6:]:
+            if msg["role"] == "user":
+                st.markdown(f'<div class="sfx-chat-user">{msg["content"]}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="sfx-chat-bot">{msg["content"][:300]}{"..." if len(msg["content"]) > 300 else ""}</div>', unsafe_allow_html=True)
+
+        # Quick action buttons
+        quick_cols = st.columns(2)
+        with quick_cols[0]:
+            if st.button("Run pipeline", key="sidebar_run_pipeline", use_container_width=True):
+                st.session_state["auto_run_requested"] = True
+                st.rerun()
+        with quick_cols[1]:
+            if st.button("Show status", key="sidebar_status", use_container_width=True):
+                from modules.ai_agent import build_app_context
+                ctx = build_app_context(st.session_state)
+                st.session_state["sidebar_chat_history"].append({"role": "user", "content": "Show pipeline status"})
+                st.session_state["sidebar_chat_history"].append({"role": "assistant", "content": ctx})
+                st.rerun()
+
+        # Chat input
+        sidebar_q = st.text_input("Ask anything...", key="sidebar_ai_q", placeholder="What should I do next?")
+        if sidebar_q and st.button("Send", key="sidebar_ai_send"):
+            from modules.ai_agent import app_agent_chat
+            api_key = st.session_state.get("groq_api_key")
+            answer = app_agent_chat(sidebar_q, st.session_state, st.session_state["sidebar_chat_history"], api_key)
+            st.session_state["sidebar_chat_history"].append({"role": "user", "content": sidebar_q})
+            st.session_state["sidebar_chat_history"].append({"role": "assistant", "content": answer})
+            st.rerun()
 
 # ═══════════════════════════════════════════════════════
-# HEADER — Step Progress Pills
+# HERO — one per tab: what the page does + 4 live numbers
 # ═══════════════════════════════════════════════════════
-step_names = {1: "Data Ingestion", 2: "P-Mapping", 3: "Polygon Gen", 4: "AWB Analysis", 5: "Financial Intel", 6: "AI Agent"}
-step_done = {
-    1: status["cluster"] and status["pincodes"],
-    2: st.session_state.get("final_output_df") is not None,
-    3: st.session_state.get("polygon_records_df") is not None,
-    4: st.session_state.get("final_result_df") is not None,
-    5: False,
-    6: False,
+_HERO = {
+    "1": ("Step 1 of 5 · Data", "Load your <em>data</em>",
+          "Add the clustering sheet, the pincode list and the pincode boundaries. "
+          "Files you load here are saved and load again next time."),
+    "2": ("Step 2 of 5 · P mapping", "Distance-based <em>P mapping</em>",
+          "Works out how far each pincode is from its hub and which payout category that distance falls in."),
+    "3": ("Step 3 of 5 · Polygons", "Build and edit <em>polygons</em>",
+          "Draws payout polygons around each hub from pincode boundaries. "
+          "Adjust them on the map, then export them for Google My Maps."),
+    "4": ("Step 4 of 5 · Shipments", "Shipments by <em>cluster</em>",
+          "Fetches shipments (AWBs) from BigQuery, places each one in a cluster and works out its payout."),
+    "5": ("Step 5 of 5 · Financials", "Financial <em>intelligence</em>",
+          "Compares payout under the SOP P mapping, the existing mapping and clusters, hub by hub, "
+          "so you can see which costs least."),
+    "6": ("Assistant", "Ask the <em>AI agent</em>",
+          "Ask questions about your data in plain English, or let the agent run the pipeline for you."),
+    "7": ("Google My Maps", "Hub polygons from <em>My Maps</em>",
+          "Shows the live polygons from your Google My Maps. Edit them in My Maps; "
+          "here you can view, search and download them."),
 }
-current_step = int(nav[0]) if nav[0].isdigit() else 6
-pills_html = '<div class="step-pills">'
-for i, name in step_names.items():
-    cls = "complete" if step_done[i] else ("active" if i == current_step else "idle")
-    icon = "✓" if step_done[i] else str(i)
-    pills_html += f'<span class="step-pill {cls}">{icon}  {name}</span>'
-pills_html += '</div>'
-st.markdown(pills_html, unsafe_allow_html=True)
+
+
+def _hero_stats():
+    def _rows(key):
+        _df = st.session_state.get(key)
+        return 0 if _df is None else len(_df)
+    def _nunique(col_names):
+        # first loaded table that has the column: cluster sheet > P-mapping output > polygons
+        for _k in ("cluster_df", "final_output_df", "polygon_records_df"):
+            _df = st.session_state.get(_k)
+            if _df is None:
+                continue
+            for _c in col_names:
+                if _c in _df.columns:
+                    return int(_df[_c].nunique())
+        return 0
+    _hubs = _nunique(("Hub_Name", "Hub Name"))
+    _pins = _nunique(("Pincode",))
+    _awbs = _rows("final_result_df") or _rows("awb_raw_df")
+    return [
+        ("hub", ui_theme.fmt_count(_hubs), "Hubs"),
+        ("pin", ui_theme.fmt_count(_pins), "Pincodes"),
+        ("poly", ui_theme.fmt_count(_rows("polygon_records_df")), "Polygons"),
+        ("box", ui_theme.fmt_count(_awbs), "AWBs loaded"),
+    ]
+
+
+_eb, _ttl, _txt = _HERO.get(nav[0], _HERO["1"])
+ui_theme.render_hero(_eb, _ttl, _txt, _hero_stats())
 
 if loaded:
     st.toast(f"Auto-loaded: {', '.join(loaded)}", icon="📂")
@@ -856,12 +626,12 @@ if st.session_state.get("auto_run_requested"):
         auto_progress.progress(1.0, text="Pipeline complete!")
 
         # Show results
-        result_html = '<div class="sfx-card" style="border-left:4px solid #0B8A7A">'
-        result_html += '<div style="font-weight:700;color:#0B8A7A;margin-bottom:8px;font-family:Work Sans,sans-serif">Pipeline Results</div>'
+        result_html = '<div class="sfx-card">'
+        result_html += '<div class="ttl">Pipeline results</div>'
         for s in steps_completed:
-            result_html += f'<div style="padding:2px 0;color:#0B8A7A">{s}</div>'
+            result_html += f'<div style="padding:2px 0;color:var(--ok)">{s}</div>'
         for s in steps_failed:
-            result_html += f'<div style="padding:2px 0;color:#EF4444">{s}</div>'
+            result_html += f'<div style="padding:2px 0;color:var(--bad)">{s}</div>'
         result_html += '</div>'
         auto_status.markdown(result_html, unsafe_allow_html=True)
 
@@ -917,7 +687,6 @@ def _get_mymaps(url, quiet=False):
 # STEP 1 — DATA INGESTION
 # ═══════════════════════════════════════════════════════
 if nav.startswith("1"):
-    st.markdown('<div class="sfx-header">Step 1 — Data Ingestion</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown('<div class="sfx-card">', unsafe_allow_html=True)
@@ -1116,7 +885,6 @@ if nav.startswith("1"):
 # STEP 2 — P MAPPING
 # ═══════════════════════════════════════════════════════
 elif nav.startswith("2"):
-    st.markdown('<div class="sfx-header">Step 2 — P Mapping (Distance-Based Payout)</div>', unsafe_allow_html=True)
     cdf = st.session_state.get("cluster_df"); pdf = st.session_state.get("pincodes_df")
     if cdf is None or pdf is None:
         _missing = [n for n, v in [("Cluster CSV (Pincode / Hub / lat / long)", cdf), ("Pincodes reference CSV", pdf)] if v is None]
@@ -1186,12 +954,12 @@ elif nav.startswith("2"):
         if "Distance" in fo.columns:
             avg_dist = fo["Distance"].mean()
             nil_count = (fo["SP&A Aligned P mapping"] == "Nil").sum() if "SP&A Aligned P mapping" in fo.columns else 0
-            st.markdown(f'''<div class="kpi-row">
+            html_block(f'''<div class="kpi-row">
                 <div class="kpi-card blue"><div class="kpi-label">Total Records</div><div class="kpi-value">{len(fo)}</div></div>
                 <div class="kpi-card"><div class="kpi-label">Hubs</div><div class="kpi-value">{fo["Hub_Name"].nunique()}</div></div>
                 <div class="kpi-card"><div class="kpi-label">Avg Distance</div><div class="kpi-value">{avg_dist:.1f} km</div></div>
                 <div class="kpi-card red"><div class="kpi-label">Nil Distance</div><div class="kpi-value">{nil_count}</div></div>
-            </div>''', unsafe_allow_html=True)
+            </div>''')
 
         st.markdown('<div class="sfx-header">Results</div>', unsafe_allow_html=True)
         import html as _html
@@ -1199,7 +967,7 @@ elif nav.startswith("2"):
         st.markdown(f"""<div style="margin:4px 0 8px">
 <textarea id="pm_copy_ta" style="position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0">{_tsv_escaped}</textarea>
 <button onclick="var ta=document.getElementById('pm_copy_ta');ta.style.display='block';ta.select();if(navigator.clipboard){{navigator.clipboard.writeText(ta.value).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}}).catch(()=>{{document.execCommand('copy');this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}})}}else{{document.execCommand('copy');this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}}ta.style.display='none';"
- style="padding:5px 18px;background:#0B8A7A;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">Copy</button>
+ style="padding:7px 18px;background:#fff;color:var(--teal);border:1.5px solid var(--teal);border-radius:9px;cursor:pointer;font-weight:700;font-size:13px;font-family:inherit" onmouseover="this.style.background='var(--mint-3)'" onmouseout="this.style.background='#fff'">Copy</button>
 </div>""", unsafe_allow_html=True)
         st.data_editor(dfo, use_container_width=True, height=300, key="osrm_edit")
         st.download_button("Download final_output.csv", get_download_bytes(fo, "csv"), "final_output.csv", "text/csv", key="dl_fo")
@@ -1302,7 +1070,6 @@ elif nav.startswith("2"):
 # STEP 3 — POLYGON GENERATION + EDITOR
 # ═══════════════════════════════════════════════════════
 elif nav.startswith("3"):
-    st.markdown('<div class="sfx-header">Step 3 — Polygon Generation + Editor</div>', unsafe_allow_html=True)
     cdf = st.session_state.get("cluster_df")
     if cdf is None:
         render_step_guard(["Cluster CSV (hub–pincode list)"], "Polygon generation needs hub coordinates from the Cluster CSV — upload it in Step 1.")
@@ -1460,11 +1227,11 @@ elif nav.startswith("3"):
         dpdf = pdf if hub_filter == "All Hubs" else pdf[pdf.get(hub_col, pd.Series()) == hub_filter]
 
         # KPI Cards
-        st.markdown(f'''<div class="kpi-row">
+        html_block(f'''<div class="kpi-row">
             <div class="kpi-card"><div class="kpi-label">Polygons</div><div class="kpi-value">{len(dpdf)}</div></div>
             <div class="kpi-card blue"><div class="kpi-label">Pincodes</div><div class="kpi-value">{dpdf["Pincode"].nunique() if "Pincode" in dpdf.columns else 0}</div></div>
             <div class="kpi-card green"><div class="kpi-label">Hubs</div><div class="kpi-value">{dpdf[hub_col].nunique() if hub_col in dpdf.columns else 0}</div></div>
-        </div>''', unsafe_allow_html=True)
+        </div>''')
 
         st.markdown('<div class="sfx-header">Polygon Editor</div>', unsafe_allow_html=True)
         edited = st.data_editor(dpdf, use_container_width=True, height=400, num_rows="dynamic", key="poly_ed")
@@ -1946,7 +1713,7 @@ elif nav.startswith("3"):
                         _add_map_backdrop(ax)
                     else:
                         ax.plot(hlon, hlat, "r^", markersize=14, zorder=5)
-                    ax.set_title(hn, fontsize=14, fontweight="bold", color="#0B8A7A")
+                    ax.set_title(hn, fontsize=14, fontweight="bold", color="#008a71")
                     # Remove axes/scale — user doesn't want any scale
                     ax.set_axis_off()
                     path = os.path.join(out_dir, f"{hn.replace(' ', '_').replace('/', '_')}_Full_View.png")
@@ -1986,7 +1753,6 @@ elif nav.startswith("3"):
 # STEP 4 — AWB + VISUALISATION
 # ═══════════════════════════════════════════════════════
 elif nav.startswith("4"):
-    st.markdown('<div class="sfx-header">Step 4 — AWB Analysis + Visualisation</div>', unsafe_allow_html=True)
     st1, st2, st3 = st.tabs(["Fetch AWB Data", "Assign + Financials", "Hub Visualisation"])
 
     with st1:
@@ -2106,13 +1872,13 @@ elif nav.startswith("4"):
             _kpi_ex = ""
             if "Existing_Pin_Pay" in rdf.columns:
                 _kpi_ex = f'<div class="kpi-card orange"><div class="kpi-label">Existing Pin Pay</div><div class="kpi-value">₹{rdf["Existing_Pin_Pay"].sum():,.0f}</div></div>'
-            st.markdown(f'''<div class="kpi-row">
+            html_block(f'''<div class="kpi-row">
                 <div class="kpi-card blue"><div class="kpi-label">Pin Pay (SOP)</div><div class="kpi-value">₹{rdf["Pin_Pay"].sum():,.0f}</div></div>
                 {_kpi_ex}
                 <div class="kpi-card purple"><div class="kpi-label">Cluster Pay</div><div class="kpi-value">₹{rdf["Clustering_payout"].sum():,.0f}</div></div>
                 <div class="kpi-card green"><div class="kpi-label">Saving</div><div class="kpi-value">₹{rdf["Saving"].sum():,.0f}</div></div>
                 <div class="kpi-card red"><div class="kpi-label">Burning</div><div class="kpi-value">₹{rdf["Burning"].sum():,.0f}</div></div>
-            </div>''', unsafe_allow_html=True)
+            </div>''')
             show_df_download(rdf.head(200), "fin_data", "Financial Data (first 200)")
 
     with st3:
@@ -2359,7 +2125,6 @@ elif nav.startswith("4"):
 # STEP 5 — FINANCIAL INTELLIGENCE
 # ═══════════════════════════════════════════════════════
 elif nav.startswith("5"):
-    st.markdown('<div class="sfx-header">Step 5 — Financial Intelligence</div>', unsafe_allow_html=True)
     rdf = st.session_state.get("final_result_df")
     if rdf is None:
         render_step_guard(["AWB P&L results"], "Run Step 4 → Assign + Financials, or load saved results via Step 1.")
@@ -2383,22 +2148,22 @@ elif nav.startswith("5"):
             _ex_kpi = ""
             if _has_existing:
                 _ex_kpi = f'<div class="kpi-card orange"><div class="kpi-label">Existing P-Map Pay</div><div class="kpi-value">₹{ins.get("total_existing_pincode_pay", 0):,.0f}</div></div>'
-            st.markdown(f'''<div class="kpi-row">
+            html_block(f'''<div class="kpi-row">
                 <div class="kpi-card blue"><div class="kpi-label">Expected Pay (SOP)</div><div class="kpi-value">₹{ins.get("total_expt_pincode_pay", 0):,.0f}</div></div>
                 {_ex_kpi}
                 <div class="kpi-card purple"><div class="kpi-label">Cluster Payout</div><div class="kpi-value">₹{ins.get("total_cluster_payout", 0):,.0f}</div></div>
                 <div class="kpi-card green"><div class="kpi-label">Saving</div><div class="kpi-value">₹{ins.get("total_saving", 0):,.0f}</div></div>
                 <div class="kpi-card red"><div class="kpi-label">Burning</div><div class="kpi-value">₹{ins.get("total_burning", 0):,.0f}</div></div>
-                <div class="kpi-card"><div class="kpi-label">Net P&L</div><div class="kpi-value">₹{ins.get("total_p___l", 0):,.0f}</div></div>
-            </div>''', unsafe_allow_html=True)
+                <div class="kpi-card"><div class="kpi-label">Net P&L</div><div class="kpi-value">₹{ins.get("total_p_l", 0):,.0f}</div></div>
+            </div>''')
 
             ic1, ic2 = st.columns(2)
             with ic1:
                 b = ins.get("best_hub", "N/A"); bv = ins.get("best_hub_pl", 0)
-                st.markdown(f'<div class="sfx-ok"><b style="color:var(--primary-color)">Best Hub: {b}</b><br>P&L: ₹{bv:,.0f}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="sfx-ok"><b>Best hub: {b}</b><br>P&L: ₹{bv:,.0f}</div>', unsafe_allow_html=True)
             with ic2:
                 w = ins.get("worst_hub", "N/A"); wv = ins.get("worst_hub_pl", 0)
-                st.markdown(f'<div style="background:#FEF2F2;padding:16px;border-radius:8px;border-left:5px solid #EF4444"><b style="color:#EF4444">Worst Hub: {w}</b><br>P&L: ₹{wv:,.0f}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="sfx-err"><b>Worst hub: {w}</b><br>P&L: ₹{wv:,.0f}</div>', unsafe_allow_html=True)
 
             st.markdown("---")
             st.markdown('<div class="sfx-header">Detailed P&L Report</div>', unsafe_allow_html=True)
@@ -2415,11 +2180,11 @@ elif nav.startswith("5"):
                 cl_t = comp["Cluster_Payout"].sum()
                 _n_unmapped = int(comp["Existing_Pincode_Pay"].isna().sum())
 
-                st.markdown(f'''<div class="kpi-row">
+                html_block(f'''<div class="kpi-row">
                     <div class="kpi-card blue"><div class="kpi-label">SOP P-Map Total</div><div class="kpi-value">₹{sop_t:,.0f}</div></div>
                     <div class="kpi-card orange"><div class="kpi-label">Existing P-Map Total</div><div class="kpi-value">₹{ex_t:,.0f}</div></div>
                     <div class="kpi-card purple"><div class="kpi-label">Cluster Total</div><div class="kpi-value">₹{cl_t:,.0f}</div></div>
-                </div>''', unsafe_allow_html=True)
+                </div>''')
                 if _n_unmapped:
                     st.caption(f"{_n_unmapped} pincode(s) have no production mapping — shown as — and excluded from the Existing total.")
 
@@ -2434,12 +2199,12 @@ elif nav.startswith("5"):
                 cl_w = (comp["Winner"] == "Cluster Cheapest").sum()
                 tie_w = (comp["Winner"] == "Tie").sum()
 
-                st.markdown(f'''<div class="kpi-row">
+                html_block(f'''<div class="kpi-row">
                     <div class="kpi-card blue"><div class="kpi-label">SOP P-Map Cheapest</div><div class="kpi-value">{sop_w} pincodes</div></div>
                     <div class="kpi-card orange"><div class="kpi-label">Existing Cheapest</div><div class="kpi-value">{ex_w} pincodes</div></div>
                     <div class="kpi-card green"><div class="kpi-label">Cluster Cheapest</div><div class="kpi-value">{cl_w} pincodes</div></div>
                     <div class="kpi-card"><div class="kpi-label">Tie</div><div class="kpi-value">{tie_w} pincodes</div></div>
-                </div>''', unsafe_allow_html=True)
+                </div>''')
 
                 st.markdown(f'<div class="sfx-ok">Recommendation: <b>{_best_system}</b> has the lowest total payout '
                             f'(₹{_totals[_best_system]:,.0f}, ₹{_sv_vs_next:,.0f} less than the next option). '
@@ -2448,12 +2213,12 @@ elif nav.startswith("5"):
 
                 def color_row3(row):
                     if row["Winner"] == "Cluster Cheapest":
-                        return ["background:#EDF4EE"] * len(row)
+                        return ["background:#e1f4e8"] * len(row)
                     elif row["Winner"] == "Existing P-Map Cheapest":
-                        return ["background:#FFF7ED"] * len(row)
+                        return ["background:#fff4d6"] * len(row)
                     elif row["Winner"] == "SOP P-Map Cheapest":
-                        return ["background:#EFF6FF"] * len(row)
-                    return ["background:#F7FAF7"] * len(row)
+                        return ["background:#e8efec"] * len(row)
+                    return ["background:#f3f9f7"] * len(row)
 
                 st.dataframe(comp.style.apply(color_row3, axis=1).format({
                     "Expt_Pincode_Pay": "₹{:,.0f}", "Existing_Pincode_Pay": "₹{:,.0f}",
@@ -2468,22 +2233,22 @@ elif nav.startswith("5"):
                 cl_s = comp[comp["Winner"] == "Cluster Cheaper"]["Saving_Amount"].sum()
                 pm_s = comp[comp["Winner"] == "P-Map Cheaper"]["Saving_Amount"].sum()
 
-                st.markdown(f'''<div class="kpi-row">
+                html_block(f'''<div class="kpi-row">
                     <div class="kpi-card green"><div class="kpi-label">Cluster Cheaper</div><div class="kpi-value">{cl_w} pincodes</div></div>
                     <div class="kpi-card red"><div class="kpi-label">P-Map Cheaper</div><div class="kpi-value">{pm_w} pincodes</div></div>
                     <div class="kpi-card green"><div class="kpi-label">Cluster Saves</div><div class="kpi-value">₹{cl_s:,.0f}</div></div>
                     <div class="kpi-card red"><div class="kpi-label">P-Map Saves</div><div class="kpi-value">₹{pm_s:,.0f}</div></div>
-                </div>''', unsafe_allow_html=True)
+                </div>''')
 
                 rec = "**Cluster-based payout**" if cl_s > pm_s else "**P-Mapping**"
                 st.markdown(f'<div class="sfx-ok">Recommendation: {rec} saves ₹{max(cl_s, pm_s):,.0f}</div>', unsafe_allow_html=True)
 
                 def color_row(row):
                     if row["Winner"] == "Cluster Cheaper":
-                        return ["background:#EDF4EE"] * len(row)
+                        return ["background:#e1f4e8"] * len(row)
                     elif row["Winner"] == "P-Map Cheaper":
-                        return ["background:#FEF2F2"] * len(row)
-                    return ["background:#F7FAF7"] * len(row)
+                        return ["background:#fdebe8"] * len(row)
+                    return ["background:#f3f9f7"] * len(row)
 
                 st.dataframe(comp.style.apply(color_row, axis=1).format({
                     "Expt_Pincode_Pay": "₹{:,.0f}", "Cluster_Payout": "₹{:,.0f}",
@@ -2509,8 +2274,8 @@ elif nav.startswith("5"):
                     add_log("Burn analysis complete", "success")
             if st.session_state.get("burn_analysis_report"):
                 st.markdown(
-                    f'<div class="sfx-card" style="border-left:4px solid #EF4444">'
-                    f'<div style="font-weight:700;color:#EF4444;margin-bottom:8px;font-family:\'Work Sans\',sans-serif">Burn Analysis Report</div>'
+                    f'<div class="sfx-card">'
+                    f'<div class="ttl" style="color:var(--bad)">Burn analysis report</div>'
                     f'{st.session_state["burn_analysis_report"]}</div>',
                     unsafe_allow_html=True
                 )
@@ -2522,7 +2287,7 @@ elif nav.startswith("5"):
                         st.session_state["ai_auto_report"] = run_auto_analysis(report, ins, api_key)
                         add_log("AI auto-analysis complete", "success")
             if st.session_state.get("ai_auto_report"):
-                st.markdown(f'<div class="sfx-card" style="border-left:4px solid #0B8A7A"><div style="font-weight:700;color:#0B8A7A;margin-bottom:8px;font-family:\'Work Sans\',sans-serif">Auto-Analysis</div>{st.session_state["ai_auto_report"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="sfx-card"><div class="ttl">Auto-analysis</div>{st.session_state["ai_auto_report"]}</div>', unsafe_allow_html=True)
 
             st.markdown("---")
             st.markdown("#### Ask about the financial data")
@@ -2544,7 +2309,6 @@ elif nav.startswith("5"):
 # STEP 6 — AI AGENT (Full App-Aware Assistant)
 # ═══════════════════════════════════════════════════════
 elif nav.startswith("6"):
-    st.markdown('<div class="sfx-header">AI Agent — Geo Intelligence Assistant</div>', unsafe_allow_html=True)
 
     api_key = st.session_state.get("groq_api_key")
     if not api_key:
@@ -2615,7 +2379,6 @@ elif nav.startswith("7"):
     import streamlit.components.v1 as components
     from modules import mymaps_connector as mmc
 
-    st.markdown('<div class="sfx-header">Google My Maps — Hub Polygons</div>', unsafe_allow_html=True)
     st.caption("Your Google My Maps maps, inside the portal. Switch between maps, view them live, open the "
                "My Maps editor to make changes, and count / search / download polygons and hub photos.")
 
@@ -2949,12 +2712,14 @@ with st.expander("Activity Log", expanded=False):
     else:
         for log in reversed(logs[-30:]):
             dot_cls = log["level"]
-            colors = {"info": "#8896A6", "success": "#0B8A7A", "warning": "#F59E0B", "error": "#EF4444"}
-            c = colors.get(dot_cls, "#8896A6")
-            st.markdown(f'<div class="log-entry log-{dot_cls}"><span class="log-dot" style="background:{c}"></span><span style="flex:1;color:var(--text-color)">{log["msg"]}</span><span class="log-time">{log["time"]}</span></div>', unsafe_allow_html=True)
+            colors = {"info": "#7a817e", "success": "#0aa75f", "warning": "#f08a00", "error": "#e5473b"}
+            c = colors.get(dot_cls, "#7a817e")
+            st.markdown(f'<div class="log-entry log-{dot_cls}"><span class="log-dot" style="background:{c}"></span><span style="flex:1">{log["msg"]}</span><span class="log-time">{log["time"]}</span></div>', unsafe_allow_html=True)
         if st.button("Clear Log", key="clear_log"):
             st.session_state["app_logs"] = []
             st.rerun()
+
+ui_theme.render_footer(datetime.now().year)
 
 # ═══════════════════════════════════════════════════════
 # AUTO-PERSIST — Sync session DataFrames to DuckDB

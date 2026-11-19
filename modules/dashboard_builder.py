@@ -78,28 +78,29 @@ def build_comparison_table(report_df):
 
 
 def style_report_html(report_df):
-    rows = ['<table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;">']
-    rows.append('<thead><tr style="background:#0B8A7A;color:white;">')
+    # Styled by the Shadowfax UI kit (.sfx-table in modules/ui_theme.py):
+    # mint sticky header, Hub Total rows in mint, Grand Total in butter.
+    rows = ['<div class="sfx-table-wrap"><table class="sfx-table">']
+    rows.append('<thead><tr>')
     for c in report_df.columns:
-        rows.append(f'<th style="padding:10px 12px;text-align:center;border:1px solid #ddd;">{c}</th>')
+        rows.append(f'<th>{c}</th>')
     rows.append('</tr></thead><tbody>')
     for _, row in report_df.iterrows():
         is_ht = str(row.get("pincode", "")) == "Hub Total"
         is_gt = str(row.get("hub", "")) == "Grand Total"
-        bg = "#E8F4FD" if is_ht else ("#D4EDDA" if is_gt else "white")
-        fw = "bold" if is_ht or is_gt else "normal"
-        rows.append(f'<tr style="background:{bg};font-weight:{fw};">')
+        cls = "gt" if is_gt else ("ht" if is_ht else "")
+        rows.append(f'<tr class="{cls}">' if cls else '<tr>')
         for c in report_df.columns:
-            v = row[c]; s = "padding:8px 10px;text-align:center;border:1px solid #eee;"
-            if c in ["P & L", "P & L %"] and isinstance(v, (int, float)):
-                s += " color:green;" if v > 0 else (" color:red;" if v < 0 else "")
+            v = row[c]; tcls = ""
+            if c in ["P & L", "P & L %"] and isinstance(v, (int, float)) and not pd.isna(v):
+                tcls = "pos" if v > 0 else ("neg" if v < 0 else "")
             if isinstance(v, float) and pd.isna(v):
                 d = "—"
             else:
                 d = f"{v:.2f}%" if c == "P & L %" and isinstance(v, float) else (f"{v:,.0f}" if isinstance(v, float) else str(v))
-            rows.append(f'<td style="{s}">{d}</td>')
+            rows.append(f'<td class="{tcls}">{d}</td>' if tcls else f'<td>{d}</td>')
         rows.append('</tr>')
-    rows.append('</tbody></table>')
+    rows.append('</tbody></table></div>')
     return "\n".join(rows)
 
 

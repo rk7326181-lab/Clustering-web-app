@@ -91,7 +91,8 @@ Clustering-web-app/
 │   ├── data_loader.py              # CSV / BigQuery / Kepler.gl format loading
 │   ├── cluster_assignor.py         # Point-in-polygon AWB assignment (STRtree)
 │   ├── bigquery_client.py          # BigQuery client + OAuth flow
-│   └── duckdb_store.py             # Local DuckDB session cache
+│   ├── duckdb_store.py             # Local DuckDB session cache
+│   └── ui_theme.py                 # Shadowfax UI kit: CSS, header, hero, footer
 │
 ├── utils/
 │   └── __init__.py                 # Constants, geometry helpers, payout slabs
@@ -108,8 +109,12 @@ Clustering-web-app/
 │   ├── Awb_with_polygon_mapping.csv
 │   └── Hub_Payout_Views_Final_All_Hubs/   # PNG map per hub
 │
+├── static/                         # Served at app/static/ (enableStaticServing)
+│   ├── shadowfax_logo.svg          # Header logo + favicon
+│   └── fonts/montserrat-latin.woff2  # Montserrat, served locally (no web fonts)
+│
 ├── .streamlit/
-│   └── config.toml                 # Theme: #0B8A7A, upload limit: 500 MB
+│   └── config.toml                 # Shadowfax UI kit theme, static serving, 500 MB uploads
 └── .devcontainer/
     └── devcontainer.json           # GitHub Codespaces / VS Code Dev Container
 ```

@@ -546,7 +546,7 @@ def _fallback_analysis(insights):
     """Rule-based fallback when Groq is unavailable."""
     total_saving = insights.get("total_saving", 0)
     total_burning = insights.get("total_burning", 0)
-    total_pl = insights.get("total_p_&_l", insights.get("total_p___l", 0))
+    total_pl = insights.get("total_p_l", insights.get("total_p_&_l", 0))
     best = insights.get("best_hub", "N/A")
     worst = insights.get("worst_hub", "N/A")
 
