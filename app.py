@@ -71,7 +71,7 @@ def _check_access():
         with st.form("login_form"):
             email = st.text_input("Email", placeholder="your.name@company.com")
             password = st.text_input("Password", type="password", placeholder="Enter app password")
-            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("Sign in", type="primary", width="stretch")
 
     if submitted:
         email_ok = (not allowed_emails) or (email.strip().lower() in [e.lower() for e in allowed_emails])
@@ -367,7 +367,7 @@ with _drawer:
         _is_cloud = os.path.exists("/mount/src") or os.environ.get("STREAMLIT_SHARING_MODE") == "true"
         _auth_url, _auth_state = get_google_auth_url()
         if _auth_url:
-            st.link_button("Sign in with Google", _auth_url, type="primary", use_container_width=True)
+            st.link_button("Sign in with Google", _auth_url, type="primary", width="stretch")
             st.caption("Takes you to Google to sign in. No JSON key needed. "
                        "If sign-in stops with a connection error (accounts.youtube.com), "
                        "your network is blocking Google's sign-in. Switch networks, or "
@@ -461,11 +461,11 @@ with _drawer:
         # Quick action buttons
         quick_cols = st.columns(2)
         with quick_cols[0]:
-            if st.button("Run pipeline", key="sidebar_run_pipeline", use_container_width=True):
+            if st.button("Run pipeline", key="sidebar_run_pipeline", width="stretch"):
                 st.session_state["auto_run_requested"] = True
                 st.rerun()
         with quick_cols[1]:
-            if st.button("Show status", key="sidebar_status", use_container_width=True):
+            if st.button("Show status", key="sidebar_status", width="stretch"):
                 from modules.ai_agent import build_app_context
                 ctx = build_app_context(st.session_state)
                 st.session_state["sidebar_chat_history"].append({"role": "user", "content": "Show pipeline status"})
@@ -753,7 +753,7 @@ if nav.startswith("1"):
                     st.error(str(e))
         else:
             st.caption("Add pincodes manually:")
-            manual = st.data_editor(pd.DataFrame({"Pincode": [""], "Hub_Name": [""], "Hub_lat": [0.0], "Hub_long": [0.0]}), num_rows="dynamic", key="manual_cluster", use_container_width=True)
+            manual = st.data_editor(pd.DataFrame({"Pincode": [""], "Hub_Name": [""], "Hub_lat": [0.0], "Hub_long": [0.0]}), num_rows="dynamic", key="manual_cluster", width="stretch")
             if st.button("Use Manual Data", key="use_manual"):
                 valid = manual.dropna(subset=["Pincode"]).copy()
                 valid = valid[valid["Pincode"] != ""]
@@ -992,7 +992,7 @@ elif nav.startswith("2"):
 <button onclick="var ta=document.getElementById('pm_copy_ta');ta.style.display='block';ta.select();if(navigator.clipboard){{navigator.clipboard.writeText(ta.value).then(()=>{{this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}}).catch(()=>{{document.execCommand('copy');this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}})}}else{{document.execCommand('copy');this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',2000)}}ta.style.display='none';"
  style="padding:7px 18px;background:#fff;color:var(--teal);border:1.5px solid var(--teal);border-radius:9px;cursor:pointer;font-weight:700;font-size:13px;font-family:inherit" onmouseover="this.style.background='var(--mint-3)'" onmouseout="this.style.background='#fff'">Copy</button>
 </div>""", unsafe_allow_html=True)
-        st.data_editor(dfo, use_container_width=True, height=300, key="osrm_edit")
+        st.data_editor(dfo, width="stretch", height=300, key="osrm_edit")
         st.download_button("Download final_output.csv", lazy_download_data(fo, "csv"), "final_output.csv", "text/csv", key="dl_fo")
 
         if "SP&A Aligned P mapping" in fo.columns:
@@ -1050,13 +1050,13 @@ elif nav.startswith("2"):
                     for k, v in _ov.items()
                 ])
                 st.caption(f"{len(_ov)} override(s) active")
-                st.dataframe(_ov_df, use_container_width=True, height=min(160, 40 + len(_ov_df)*35))
+                st.dataframe(_ov_df, width="stretch", height=min(160, 40 + len(_ov_df)*35))
                 if st.button("Clear All Switches", key="clear_switches"):
                     st.session_state["pmapping_overrides"] = {}
                     st.rerun()
 
         _show_cols = [c for c in ["Pincode","Hub_Name","Distance","SP&A Aligned P mapping","P_Category","Payout (₹/km)","Amount Capping"] if c in _pdf.columns]
-        st.dataframe(_pdf[_show_cols], use_container_width=True, height=280)
+        st.dataframe(_pdf[_show_cols], width="stretch", height=280)
         st.download_button("Download with P Categories", lazy_download_data(_pdf, "csv"),
                            "final_output_with_pcategory.csv", "text/csv", key="dl_fo_pcat")
 
@@ -1135,7 +1135,7 @@ elif nav.startswith("3"):
                     ),
                     "Custom": st.column_config.CheckboxColumn("Override Default"),
                 },
-                use_container_width=True, height=min(400, 35 * len(hub_radius_data) + 38),
+                width="stretch", height=min(400, 35 * len(hub_radius_data) + 38),
                 key="hub_radius_editor",
             )
             new_map = {}
@@ -1257,7 +1257,7 @@ elif nav.startswith("3"):
         </div>''')
 
         st.markdown('<div class="sfx-header">Polygon Editor</div>', unsafe_allow_html=True)
-        edited = st.data_editor(dpdf, use_container_width=True, height=400, num_rows="dynamic", key="poly_ed")
+        edited = st.data_editor(dpdf, width="stretch", height=400, num_rows="dynamic", key="poly_ed")
         ec1, ec2, ec3 = st.columns(3)
         with ec1:
             if st.button("Save Changes", type="primary", key="save_poly"):
@@ -1493,13 +1493,12 @@ elif nav.startswith("3"):
         try:
             import folium
             from streamlit_folium import st_folium
-            import streamlit.components.v1 as components
             from modules.visualizer import create_polygon_map_cached, create_editable_polygon_map, _df_hash
             if edit_polygons:
                 # ── GEOMAN EDITOR (replaces unreliable streamlit-folium editing) ──
                 from modules.geoman_editor import build_geoman_editor_html
                 _geoman_html = build_geoman_editor_html(pdf, hub_filter=hub_filter, height=660)
-                components.html(_geoman_html, height=660, scrolling=False)
+                st.iframe(_geoman_html, height=660)
                 # Legacy streamlit-folium edit map (kept as fallback for data capture)
                 map_out_s3 = None
                 # Buffer all_drawings if available from previous interaction
@@ -1680,7 +1679,7 @@ elif nav.startswith("3"):
                     s3_show_rate_labels,
                 )
                 if html:
-                    components.html(html, height=620, scrolling=False)
+                    st.iframe(html, height=620)
         except ImportError:
             st.info("Install folium for maps.")
 
@@ -1769,7 +1768,7 @@ elif nav.startswith("3"):
             )
         for hn, path in existing_hub_images.items():
             with st.expander(f"{hn}"):
-                st.image(path, use_container_width=True)
+                st.image(path, width="stretch")
                 st.download_button(f"Download {hn}", open(path, "rb").read(), os.path.basename(path), "image/png", key=f"di_{hn}")
 
 # ═══════════════════════════════════════════════════════
@@ -1841,7 +1840,7 @@ elif nav.startswith("4"):
         awb = st.session_state.get("awb_raw_df")
         if awb is not None:
             st.markdown('<div class="sfx-header">AWB Data Preview</div>', unsafe_allow_html=True)
-            st.dataframe(awb.head(10), use_container_width=True, height=300)
+            st.dataframe(awb.head(10), width="stretch", height=300)
             st.caption(f"Total rows: {len(awb):,}")
             st.download_button("Download Awb_with_polygon_mapping.csv", lazy_download_data(awb, "csv"), "Awb_with_polygon_mapping.csv", "text/csv", key="dl_awb_raw")
 
@@ -1860,7 +1859,7 @@ elif nav.startswith("4"):
                 if _n_unknown:
                     _cap += f" · {_n_unknown} unknown categories — treated as no mapping"
                 st.caption(_cap)
-                st.dataframe(_pin_map, use_container_width=True, height=280)
+                st.dataframe(_pin_map, width="stretch", height=280)
                 st.download_button("Download Existing Pincode Mapping", lazy_download_data(_pin_map, "csv"), "Existing_pincode_mapping.csv", "text/csv", key="dl_existing_pinmap")
 
     with st2:
@@ -1938,7 +1937,6 @@ elif nav.startswith("4"):
         try:
             import folium
             from streamlit_folium import st_folium
-            import streamlit.components.v1 as components
             from modules.visualizer import create_polygon_map, create_polygon_map_cached, create_editable_polygon_map, _df_hash
             if edit_mode_s4:
                 # Edit mode: Geoman/Leaflet.draw editor (same as Step 3)
@@ -1953,8 +1951,8 @@ elif nav.startswith("4"):
                 )
                 _s4_awb_df = st.session_state.get("awb_raw_df")
                 _s4_geoman_html = _s4_build_editor(poly, hub_filter=sel_hub, height=660, awb_df=_s4_awb_df)
-                components.html(_s4_geoman_html, height=660, scrolling=False)
-                map_out_s4 = None  # components.html has no return value
+                st.iframe(_s4_geoman_html, height=660)
+                map_out_s4 = None  # st.iframe has no return value
             else:
                 # Non-edit mode: use cached HTML for speed
                 html = create_polygon_map_cached(
@@ -1963,7 +1961,7 @@ elif nav.startswith("4"):
                     s4_show_rate_labels,
                 )
                 if html:
-                    components.html(html, height=720, scrolling=False)
+                    st.iframe(html, height=720)
                 map_out_s4 = None
             # ── Import Edited Polygons (same as Step 3) ───────────────────────
             if edit_mode_s4:
@@ -2199,7 +2197,7 @@ elif nav.startswith("5"):
             st.markdown(style_report_html(report), unsafe_allow_html=True)
             st.download_button("Download Report CSV", lazy_download_data(report, "csv"), "Pivot_Table.csv", "text/csv", key="dl_piv")
             with st.expander("Editable View"):
-                st.data_editor(report, use_container_width=True, height=400)
+                st.data_editor(report, width="stretch", height=400)
 
         with dtab2:
             if comp is not None and not comp.empty and "Existing_Pincode_Pay" in comp.columns:
@@ -2253,7 +2251,7 @@ elif nav.startswith("5"):
                     "Expt_Pincode_Pay": "₹{:,.0f}", "Existing_Pincode_Pay": "₹{:,.0f}",
                     "Cluster_Payout": "₹{:,.0f}", "Difference": "₹{:,.0f}",
                     "Best_Pay": "₹{:,.0f}", "Saving_Amount": "₹{:,.0f}",
-                }, na_rep="—"), use_container_width=True, height=400)
+                }, na_rep="—"), width="stretch", height=400)
                 st.download_button("Download Comparison CSV", lazy_download_data(comp, "csv"), "Comparison.csv", "text/csv", key="dl_comp")
             elif comp is not None and not comp.empty:
                 st.markdown('<div class="sfx-header">P-Mapping vs Cluster Comparison</div>', unsafe_allow_html=True)
@@ -2282,7 +2280,7 @@ elif nav.startswith("5"):
                 st.dataframe(comp.style.apply(color_row, axis=1).format({
                     "Expt_Pincode_Pay": "₹{:,.0f}", "Cluster_Payout": "₹{:,.0f}",
                     "Difference": "₹{:,.0f}", "Saving_Amount": "₹{:,.0f}",
-                }), use_container_width=True, height=400)
+                }), width="stretch", height=400)
                 st.download_button("Download Comparison CSV", lazy_download_data(comp, "csv"), "Comparison.csv", "text/csv", key="dl_comp")
             else:
                 st.info("Comparison requires financial data.")
@@ -2405,7 +2403,6 @@ elif nav.startswith("6"):
 # ═══════════════════════════════════════════════════════
 elif nav.startswith("7"):
     import re
-    import streamlit.components.v1 as components
     from modules import mymaps_connector as mmc
 
     st.caption("Your Google My Maps maps, inside the portal. Switch between maps, view them live, open the "
@@ -2426,7 +2423,7 @@ elif nav.startswith("7"):
                  "Find Polygon can search all maps at once.")
     with _sw2:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh from My Maps", key="mm_refresh", use_container_width=True,
+        if st.button("🔄 Refresh from My Maps", key="mm_refresh", width="stretch",
                      help="Re-read all maps now (otherwise each is re-read every 15 minutes)."):
             _load_mymaps.clear()
             _mymaps_all_csv.clear()
@@ -2499,7 +2496,7 @@ elif nav.startswith("7"):
                                          key=f"mm_live_hub_{_active_mid}")
         with _lv2:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            st.link_button("✏️ Open My Maps editor", _edit_link, type="primary", use_container_width=True)
+            st.link_button("✏️ Open My Maps editor", _edit_link, type="primary", width="stretch")
         _embed = f"https://www.google.com/maps/d/embed?mid={_active_mid}&rev={st.session_state.get('mm_embed_rev', 0)}"
         if _zoom_hub and _zoom_hub != "(whole map)":
             _h = mm["hubs"][mm["hubs"]["Hub Name"] == _zoom_hub].iloc[0]
@@ -2507,7 +2504,7 @@ elif nav.startswith("7"):
         if hasattr(st, "iframe"):
             st.iframe(_embed, height=720)
         else:
-            components.iframe(_embed, height=720)
+            st.iframe(_embed, height=720)
         st.caption("This is your live My Maps map (view only — Google does not allow its editor inside other "
                    "websites). To change polygons, click **Open My Maps editor**, edit and it saves "
                    "automatically in My Maps; then click **🔄 Refresh from My Maps** here to see the changes "
@@ -2524,28 +2521,28 @@ elif nav.startswith("7"):
         _pts = hub_pts.rename(columns={"Hub Name": "Hub_Name"})
         m = create_polygon_map(sel_df, _pts if not _pts.empty else None, None, False, "none", None, "All", None, True)
         if m is not None:
-            components.html(m._repr_html_(), height=height, scrolling=False)
+            st.iframe(m._repr_html_(), height=height)
 
     def _mm_downloads(sel_df, hub_pts, slug, key):
         _stamp = datetime.now().strftime("%Y%m%d")
         d1, d2, d3 = st.columns(3)
         with d1:
             st.download_button("⬇ CSV", mmc.to_csv_bytes(sel_df), f"{slug}_polygons_{_stamp}.csv",
-                               "text/csv", key=f"{key}_csv", use_container_width=True)
+                               "text/csv", key=f"{key}_csv", width="stretch")
         with d2:
             st.download_button("⬇ KML (My Maps)", mmc.to_kml(sel_df, hub_pts, slug).encode("utf-8"),
                                f"{slug}_polygons_{_stamp}.kml", "application/vnd.google-earth.kml+xml",
-                               key=f"{key}_kml", use_container_width=True)
+                               key=f"{key}_kml", width="stretch")
         with d3:
             st.download_button("⬇ GeoJSON", mmc.to_geojson(sel_df).encode("utf-8"),
                                f"{slug}_polygons_{_stamp}.geojson", "application/geo+json",
-                               key=f"{key}_geojson", use_container_width=True)
+                               key=f"{key}_geojson", width="stretch")
 
     def _mm_table(sel_df, key):
         _show_wkt = st.checkbox("Show geometry (WKT) column", value=False, key=f"{key}_wkt")
         _cols = [c for c in ["Map", "Hub Name", "Cluster_Code", "Pincode", "Cluster_Category", "Description",
                              "Layer", "Hub Source"] + (["Polygon WKT"] if _show_wkt else []) if c in sel_df.columns]
-        st.dataframe(sel_df[_cols], use_container_width=True, height=min(420, 35 * len(sel_df) + 38),
+        st.dataframe(sel_df[_cols], width="stretch", height=min(420, 35 * len(sel_df) + 38),
                      hide_index=True)
 
     # ── Find a polygon (searches several maps) ──
@@ -2589,7 +2586,7 @@ elif nav.startswith("7"):
                 st.markdown("**Matches per map**")
                 st.dataframe(found.groupby("Map").agg(Polygons=("Cluster_Code", "size"),
                                                       Hubs=("Hub Name", "nunique")).reset_index(),
-                             hide_index=True, use_container_width=True)
+                             hide_index=True, width="stretch")
                 _mm_map(found, found_pts, height=520)
                 _qslug = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in _q.strip())[:40]
                 _mm_downloads(found, found_pts, _qslug, "mm_find")
@@ -2656,11 +2653,11 @@ elif nav.startswith("7"):
                 _br = (sel.assign(Rate=sel["Description"].replace("", "—"),
                                   Category=sel["Cluster_Category"].replace("", "—"))
                           .groupby(["Rate", "Category"]).size().reset_index(name="Polygons"))
-                st.dataframe(_br, hide_index=True, use_container_width=True)
+                st.dataframe(_br, hide_index=True, width="stretch")
             with _bc2:
                 st.markdown("**Polygons per hub / pincode**")
                 _bp = sel.groupby(["Hub Name", "Pincode"]).size().reset_index(name="Polygons")
-                st.dataframe(_bp, hide_index=True, use_container_width=True, height=min(300, 35 * len(_bp) + 38))
+                st.dataframe(_bp, hide_index=True, width="stretch", height=min(300, 35 * len(_bp) + 38))
 
             _mm_map(sel, sel_pts)
             _slug = (sel_hubs[0] if len(sel_hubs) == 1 else f"{len(sel_hubs)}hubs").replace(" ", "_").replace("/", "_")
@@ -2697,7 +2694,7 @@ elif nav.startswith("7"):
                 _pcols = st.columns(min(2, len(_photos)))
                 for _i, (_hn, _png) in enumerate(_photos):
                     with _pcols[_i % len(_pcols)]:
-                        st.image(_png, caption=_hn, use_container_width=True)
+                        st.image(_png, caption=_hn, width="stretch")
 
             _mm_table(sel, "mm_hub")
 
@@ -2711,25 +2708,25 @@ elif nav.startswith("7"):
         ])
         _summ = _mymaps_hub_summary(minfo["mid"], minfo["fetched_at"], mpoly)
         st.markdown(f"**{len(_summ):,} hubs in {_active['name']}**")
-        st.dataframe(_summ, hide_index=True, use_container_width=True, height=460)
+        st.dataframe(_summ, hide_index=True, width="stretch", height=460)
         _o1, _o2, _o3 = st.columns(3)
         _mslug = re.sub(r"[^A-Za-z0-9_-]+", "_", _active["name"])[:40]
         with _o1:
             st.download_button("⬇ Hub summary CSV", _summ.to_csv(index=False).encode("utf-8-sig"),
                                f"{_mslug}_hub_summary_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv",
-                               key="mm_summ_dl", use_container_width=True)
+                               key="mm_summ_dl", width="stretch")
         with _o2:
             st.download_button("⬇ All polygons CSV", _mymaps_all_csv(minfo["mid"], minfo["fetched_at"], mpoly),
                                f"{_mslug}_all_polygons_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv",
-                               key="mm_all_dl", use_container_width=True)
+                               key="mm_all_dl", width="stretch")
         with _o3:
             st.download_button("⬇ Hub locations CSV", mhubs.to_csv(index=False).encode("utf-8-sig"),
                                f"{_mslug}_hub_locations_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv",
-                               key="mm_hubs_dl", use_container_width=True)
+                               key="mm_hubs_dl", width="stretch")
         st.markdown("**Polygons per My Maps layer**")
         st.dataframe(mpoly.groupby("Layer").agg(Polygons=("Cluster_Code", "size"),
                                                 Hubs=("Hub Name", "nunique")).reset_index(),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
 
 # ═══════════════════════════════════════════════════════
 # BOTTOM — Activity Log (always visible via expander)

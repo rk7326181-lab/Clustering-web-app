@@ -7,9 +7,12 @@
 # all inside their manylinux wheels.
 
 # Core app
-streamlit>=1.50.0  # Shadowfax UI kit needs keyed containers, st.html and theme.fontFaces
+# Pinned: the exact version this app is tested on. Unpinned, Cloud installs every new
+# release on redeploy, and APIs this app used (use_container_width, components.html)
+# are scheduled for removal. Upgrade deliberately: bump, run the app, then commit.
+streamlit==1.67.0
 streamlit-folium==0.22.0
-folium>=0.15.0
+folium==0.20.0  # polygon map popups/tooltips verified on this version
 branca>=0.7.0
 
 # Data

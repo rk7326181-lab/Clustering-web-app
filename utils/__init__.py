@@ -573,7 +573,7 @@ def show_df_download(df, key, title=None):
     if title:
         st.markdown(f'<div class="sfx-section-header">{title}</div>', unsafe_allow_html=True)
     st.caption(f"📊 {len(df):,} rows × {len(df.columns)} columns")
-    st.dataframe(df, use_container_width=True, height=350)
+    st.dataframe(df, width="stretch", height=350)
     st.download_button(
         "⬇ Download CSV", lazy_download_data(df, "csv"),
         f"{key}.csv", "text/csv", key=f"dl_{key}"

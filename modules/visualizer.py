@@ -310,7 +310,36 @@ def _base_map(center_lat, center_lon, zoom=9, satellite=False, draw_enabled=Fals
         title_cancel="Exit Full Screen",
         force_separate_button=True,
     ).add_to(m)
+    _add_resize_fix(m)
     return m
+
+
+def _add_resize_fix(m):
+    """Maps inside a hidden st.tabs panel load at 0x0: Leaflet then draws only a small
+    square of tiles and no polygons until something forces a redraw. Re-measure the map
+    whenever its box changes and, if it started hidden, zoom to its contents once."""
+    from branca.element import Element
+    name = m.get_name()
+    m.get_root().script.add_child(Element(f"""
+    window.addEventListener('load', function () {{
+      var map = window['{name}'], el = document.getElementById('{name}');
+      if (!map || !el || !window.ResizeObserver) return;
+      var startedHidden = el.clientWidth === 0 || el.clientHeight === 0;
+      function fitToContents() {{
+        var b = null;
+        map.eachLayer(function (l) {{
+          if (l instanceof L.TileLayer || typeof l.getBounds !== 'function') return;
+          try {{ var lb = l.getBounds(); if (lb && lb.isValid()) b = b ? b.extend(lb) : L.latLngBounds(lb.getSouthWest(), lb.getNorthEast()); }} catch (e) {{}}
+        }});
+        if (b) map.fitBounds(b, {{padding: [20, 20]}});
+      }}
+      new ResizeObserver(function () {{
+        if (el.clientWidth === 0 || el.clientHeight === 0) return;
+        map.invalidateSize();
+        if (startedHidden) {{ startedHidden = false; fitToContents(); }}
+      }}).observe(el);
+    }});
+    """))
 
 
 def _add_surge_legend(map_obj):
