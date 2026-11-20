@@ -311,7 +311,8 @@ var activeCtrl = null;
 // ── Map setup ──────────────────────────────────────────────────────────────
 var map = L.map('map', {{center:[{center_lat:.5f},{center_lon:.5f}], zoom:10}});
 
-var street = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}.png',{{attribution:'© OpenStreetMap contributors © CARTO',maxZoom:19}}).addTo(map);
+// Esri street tiles: CARTO now returns an "API KEY REQUIRED" image for keyless requests
+var street = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{z}}/{{y}}/{{x}}',{{attribution:'Tiles © Esri',maxZoom:19}}).addTo(map);
 var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',{{attribution:'Esri',maxZoom:19}});
 L.control.layers({{'Street Map':street,'Satellite':sat}},{{}},{{position:'topright'}}).addTo(map);
 L.control.scale({{position:'bottomright'}}).addTo(map);
