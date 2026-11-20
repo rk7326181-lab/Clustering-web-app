@@ -93,7 +93,7 @@ def assign_clusters(awb_df, polygon_df, spa_mapping, progress_cb=None):
     awb_numbers = _col("fwd_del_awb_number", "awb_number")
     rider_ids   = _col("rider_id")
     hubs        = _col("hub")
-    # Production P-category as fetched from BigQuery (client_pincode_active_data).
+    # Production P-category as fetched from BigQuery (client_pincode_active_data_new, latest day).
     # Preserved separately — payment_category below is overwritten with the SOP mapping.
     existing_pcats = _col("existing_payment_category", "payment_category")
 

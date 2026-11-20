@@ -62,7 +62,7 @@ def build_comparison_table(report_df):
     # baseline (falls back to SOP where unmapped); always >= 0.
     pay_cols = ["Expt_Pincode_Pay", "Existing_Pincode_Pay", "Cluster_Payout"]
     labels = {"Expt_Pincode_Pay": "SOP P-Map Cheapest",
-              "Existing_Pincode_Pay": "Existing P-Map Cheapest",
+              "Existing_Pincode_Pay": "Current P-Map Cheapest",
               "Cluster_Payout": "Cluster Cheapest"}
     comp["Best_Pay"] = comp[pay_cols].min(axis=1, skipna=True)
 

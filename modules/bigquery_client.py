@@ -374,6 +374,8 @@ def build_awb_query(cluster_df):
         .tolist()
     )
     pincode_list = ",".join(pincodes)
+    _hubs = sorted({str(h).strip() for h in cluster_df.get("Hub_Name", []) if str(h).strip()})
+    hub_list = ",".join("'" + h.replace("\\", "").replace("'", "") + "'" for h in _hubs) or "''"
 
     Awb = f"""
     WITH awb_data AS (
@@ -443,6 +445,11 @@ def build_awb_query(cluster_df):
 
     Pin AS (
 
+        -- Current P-mapping = latest daily snapshot of the serviceability data
+        -- (same values as the "Shadowfax Serviceability" sheet, Active_Pincode tab).
+        -- client_pincode_active_data (without _new) stopped updating on 2025-12-12.
+        -- A pincode can have several hubs: prefer the cluster sheet's hub, then the
+        -- delivery row (payout is per delivery), then the most recent date.
         WITH ranked_data AS (
             SELECT
                 report_date,
@@ -451,10 +458,15 @@ def build_awb_query(cluster_df):
                 payment_category,
                 ROW_NUMBER() OVER (
                     PARTITION BY pincode
-                    ORDER BY report_date DESC
+                    ORDER BY (hub IN ({hub_list})) DESC,
+                             (request_type = "delivery") DESC,
+                             report_date DESC
                 ) AS row_num
-            FROM `data-warehousing-391512.analytics_tables.client_pincode_active_data`
+            FROM `data-warehousing-391512.analytics_tables.client_pincode_active_data_new`
             WHERE service = "regular"
+              AND report_date = (
+                  SELECT MAX(report_date)
+                  FROM `data-warehousing-391512.analytics_tables.client_pincode_active_data_new`)
         )
 
         SELECT

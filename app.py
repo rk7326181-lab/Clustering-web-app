@@ -1856,23 +1856,23 @@ elif nav.startswith("4"):
             st.caption(f"Total rows: {len(awb):,}")
             st.download_button("Download Awb_with_polygon_mapping.csv", lazy_download_data(awb, "csv"), "Awb_with_polygon_mapping.csv", "text/csv", key="dl_awb_raw")
 
-            # ── Existing Pincode Mapping (Production) ──
+            # ── Current Pincode Mapping (serviceability, latest day) ──
             _awb_cols = {c.strip().lower(): c for c in awb.columns}
             if "pincode" in _awb_cols and "payment_category" in _awb_cols:
-                st.markdown('<div class="sfx-header">Existing Pincode Mapping (Production)</div>', unsafe_allow_html=True)
+                st.markdown('<div class="sfx-header">Current P-Mapping (serviceability)</div>', unsafe_allow_html=True)
                 _map_cols = [_awb_cols["pincode"]] + ([_awb_cols["hub"]] if "hub" in _awb_cols else []) + [_awb_cols["payment_category"]]
                 _pin_map = awb[_map_cols].drop_duplicates(subset=[_awb_cols["pincode"]]).copy()
-                _pin_map.columns = ["Pincode"] + (["Hub"] if "hub" in _awb_cols else []) + ["Existing P Category"]
-                _pin_map["Payout (₹)"] = _pin_map["Existing P Category"].map(pcat_to_payout)
+                _pin_map.columns = ["Pincode"] + (["Hub"] if "hub" in _awb_cols else []) + ["Current P Category"]
+                _pin_map["Payout (₹)"] = _pin_map["Current P Category"].map(pcat_to_payout)
                 _pin_map = _pin_map.sort_values([c for c in ["Hub", "Pincode"] if c in _pin_map.columns]).reset_index(drop=True)
-                _n_mapped = _pin_map["Existing P Category"].notna().sum()
-                _n_unknown = int((_pin_map["Existing P Category"].notna() & _pin_map["Payout (₹)"].isna()).sum())
+                _n_mapped = _pin_map["Current P Category"].notna().sum()
+                _n_unknown = int((_pin_map["Current P Category"].notna() & _pin_map["Payout (₹)"].isna()).sum())
                 _cap = f"{len(_pin_map):,} pincodes · {_n_mapped:,} with a production category"
                 if _n_unknown:
                     _cap += f" · {_n_unknown} unknown categories — treated as no mapping"
                 st.caption(_cap)
                 st.dataframe(_pin_map, width="stretch", height=280)
-                st.download_button("Download Existing Pincode Mapping", lazy_download_data(_pin_map, "csv"), "Existing_pincode_mapping.csv", "text/csv", key="dl_existing_pinmap")
+                st.download_button("Download Current P-Mapping", lazy_download_data(_pin_map, "csv"), "Current_pincode_mapping.csv", "text/csv", key="dl_existing_pinmap")
 
     with st2:
         st.markdown('<div class="sfx-header">Cluster Assignment + P&L</div>', unsafe_allow_html=True)
@@ -1905,7 +1905,7 @@ elif nav.startswith("4"):
         if rdf is not None and "Pin_Pay" in rdf.columns:
             _kpi_ex = ""
             if "Existing_Pin_Pay" in rdf.columns:
-                _kpi_ex = f'<div class="kpi-card orange"><div class="kpi-label">Existing Pin Pay</div><div class="kpi-value">₹{rdf["Existing_Pin_Pay"].sum():,.0f}</div></div>'
+                _kpi_ex = f'<div class="kpi-card orange"><div class="kpi-label">Current P Pay</div><div class="kpi-value">₹{rdf["Existing_Pin_Pay"].sum():,.0f}</div></div>'
             html_block(f'''<div class="kpi-row">
                 <div class="kpi-card blue"><div class="kpi-label">Pin Pay (SOP)</div><div class="kpi-value">₹{rdf["Pin_Pay"].sum():,.0f}</div></div>
                 {_kpi_ex}
@@ -2180,13 +2180,13 @@ elif nav.startswith("5"):
         report = build_pivot_report(rdf); ins = compute_insights(report); comp = build_comparison_table(report)
         _has_existing = "Existing_Pincode_Pay" in report.columns
 
-        dtab1, dtab2, dtab3 = st.tabs(["Pivot Table", "P-Map vs Existing vs Cluster" if _has_existing else "P-Map vs Cluster", "AI Analysis"])
+        dtab1, dtab2, dtab3 = st.tabs(["Pivot Table", "SOP vs Current P vs Cluster" if _has_existing else "P-Map vs Cluster", "AI Analysis"])
 
         with dtab1:
             # KPI Cards
             _ex_kpi = ""
             if _has_existing:
-                _ex_kpi = f'<div class="kpi-card orange"><div class="kpi-label">Existing P-Map Pay</div><div class="kpi-value">₹{ins.get("total_existing_pincode_pay", 0):,.0f}</div></div>'
+                _ex_kpi = f'<div class="kpi-card orange"><div class="kpi-label">Current P-Map Pay</div><div class="kpi-value">₹{ins.get("total_existing_pincode_pay", 0):,.0f}</div></div>'
             html_block(f'''<div class="kpi-row">
                 <div class="kpi-card blue"><div class="kpi-label">Expected Pay (SOP)</div><div class="kpi-value">₹{ins.get("total_expt_pincode_pay", 0):,.0f}</div></div>
                 {_ex_kpi}
@@ -2213,7 +2213,7 @@ elif nav.startswith("5"):
 
         with dtab2:
             if comp is not None and not comp.empty and "Existing_Pincode_Pay" in comp.columns:
-                st.markdown('<div class="sfx-header">SOP P-Mapping vs Existing P-Mapping vs Cluster</div>', unsafe_allow_html=True)
+                st.markdown('<div class="sfx-header">SOP P-Mapping vs Current P-Mapping (serviceability) vs Cluster</div>', unsafe_allow_html=True)
                 sop_t = comp["Expt_Pincode_Pay"].sum()
                 ex_t = comp["Existing_Pincode_Pay"].sum()
                 cl_t = comp["Cluster_Payout"].sum()
@@ -2221,26 +2221,26 @@ elif nav.startswith("5"):
 
                 html_block(f'''<div class="kpi-row">
                     <div class="kpi-card blue"><div class="kpi-label">SOP P-Map Total</div><div class="kpi-value">₹{sop_t:,.0f}</div></div>
-                    <div class="kpi-card orange"><div class="kpi-label">Existing P-Map Total</div><div class="kpi-value">₹{ex_t:,.0f}</div></div>
+                    <div class="kpi-card orange"><div class="kpi-label">Current P-Map Total</div><div class="kpi-value">₹{ex_t:,.0f}</div></div>
                     <div class="kpi-card purple"><div class="kpi-label">Cluster Total</div><div class="kpi-value">₹{cl_t:,.0f}</div></div>
                 </div>''')
                 if _n_unmapped:
-                    st.caption(f"{_n_unmapped} pincode(s) have no production mapping — shown as — and excluded from the Existing total.")
+                    st.caption(f"{_n_unmapped} pincode(s) are not in the current serviceability data — shown as — and left out of the Current P total.")
 
-                _totals = {"Cluster-based payout": cl_t, "SOP P-Mapping (Step 2)": sop_t, "Existing P-Mapping (production)": ex_t}
+                _totals = {"Cluster-based payout": cl_t, "SOP P-Mapping (Step 2)": sop_t, "Current P-Mapping (serviceability)": ex_t}
                 _best_system = min(_totals, key=_totals.get)
                 _second = sorted(_totals.values())[1]
                 _sv_vs_next = _second - _totals[_best_system]
                 _cherry = comp["Saving_Amount"].sum()
 
                 sop_w = (comp["Winner"] == "SOP P-Map Cheapest").sum()
-                ex_w = (comp["Winner"] == "Existing P-Map Cheapest").sum()
+                ex_w = (comp["Winner"] == "Current P-Map Cheapest").sum()
                 cl_w = (comp["Winner"] == "Cluster Cheapest").sum()
                 tie_w = (comp["Winner"] == "Tie").sum()
 
                 html_block(f'''<div class="kpi-row">
                     <div class="kpi-card blue"><div class="kpi-label">SOP P-Map Cheapest</div><div class="kpi-value">{sop_w} pincodes</div></div>
-                    <div class="kpi-card orange"><div class="kpi-label">Existing Cheapest</div><div class="kpi-value">{ex_w} pincodes</div></div>
+                    <div class="kpi-card orange"><div class="kpi-label">Current P Cheapest</div><div class="kpi-value">{ex_w} pincodes</div></div>
                     <div class="kpi-card green"><div class="kpi-label">Cluster Cheapest</div><div class="kpi-value">{cl_w} pincodes</div></div>
                     <div class="kpi-card"><div class="kpi-label">Tie</div><div class="kpi-value">{tie_w} pincodes</div></div>
                 </div>''')
@@ -2253,7 +2253,7 @@ elif nav.startswith("5"):
                 def color_row3(row):
                     if row["Winner"] == "Cluster Cheapest":
                         return ["background:#e1f4e8"] * len(row)
-                    elif row["Winner"] == "Existing P-Map Cheapest":
+                    elif row["Winner"] == "Current P-Map Cheapest":
                         return ["background:#fff4d6"] * len(row)
                     elif row["Winner"] == "SOP P-Map Cheapest":
                         return ["background:#e8efec"] * len(row)
