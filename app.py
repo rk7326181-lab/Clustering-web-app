@@ -281,6 +281,7 @@ NAV_STEPS = [
     "5. Financial Intelligence",
     "6. AI Agent",
     "7. My Maps Polygons",
+    "8. Go Live",
 ]
 NAV_LABELS = {
     "1. Data Ingestion": "Data Ingestion",
@@ -290,6 +291,7 @@ NAV_LABELS = {
     "5. Financial Intelligence": "Financials",
     "6. AI Agent": "AI Agent",
     "7. My Maps Polygons": "My Maps",
+    "8. Go Live": "Go Live",
 }
 
 # Groq API key — loaded from secrets/env, never shown or copied by users.
@@ -504,6 +506,9 @@ _HERO = {
     "7": ("Google My Maps", "Hub polygons from <em>My Maps</em>",
           "Shows the live polygons from your Google My Maps. Edit them in My Maps; "
           "here you can view, search and download them."),
+    "8": ("Go live", "Send polygons <em>live</em>",
+          "Turns cluster polygons into the Saruman upload file. Hub Ids, boundaries and categories are "
+          "filled in for you, and every row is checked before you download it."),
 }
 
 
@@ -2741,6 +2746,134 @@ elif nav.startswith("7"):
         st.dataframe(mpoly.groupby("Layer").agg(Polygons=("Cluster_Code", "size"),
                                                 Hubs=("Hub Name", "nunique")).reset_index(),
                      hide_index=True, width="stretch")
+
+# ═══════════════════════════════════════════════════════
+# STEP 8 — GO LIVE (standalone: works without Step 1)
+# Builds the Saruman "Upload payout cluster" file (the payout_cluster_upload_sample
+# "Main sheet") from polygons, with every row checked. See modules/golive.py.
+# ═══════════════════════════════════════════════════════
+elif nav.startswith("8"):
+    from modules import golive as gl
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _gl_hub_ids(_client, names):
+        return gl.hub_ids(_client, names)
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _gl_service(_client, pins):
+        return gl.serviceability_hubs(_client, pins)
+
+    st.markdown('<div class="sfx-header">1 · Choose the polygons</div>', unsafe_allow_html=True)
+    gl_src = st.radio("Where are the polygons?",
+                      ["Paste rows", "Upload a file", "Polygons in this app", "Google My Maps"],
+                      horizontal=True, key="gl_src")
+    polys = None
+    if gl_src == "Paste rows":
+        st.caption("Paste exactly what you paste into the Wroking tab: one polygon per line, "
+                   "WKT ⇥ name ⇥ category (copy the three columns from your sheet or My Maps export).")
+        _txt = st.text_area("Rows", key="gl_paste", height=170, label_visibility="collapsed",
+                            placeholder="POLYGON ((78.675316 16.423597, 78.66502 16.432034, ...))\t509375_A\tC1")
+        polys = gl.parse_pasted(_txt) if _txt.strip() else None
+        if _txt.strip() and (polys is None or polys.empty):
+            st.markdown('<div class="sfx-warn">No rows found. Each line needs WKT, name and category separated by tabs.</div>',
+                        unsafe_allow_html=True)
+    elif gl_src == "Upload a file":
+        _f = st.file_uploader("CSV, Excel or KML with polygons", type=["csv", "xlsx", "kml"], key="gl_file")
+        if _f is not None:
+            try:
+                if _f.name.lower().endswith(".kml"):
+                    from modules.mymaps_connector import parse_kml
+                    polys = gl.normalise_table(parse_kml(_f.getvalue())[0])
+                elif _f.name.lower().endswith(".xlsx"):
+                    polys = gl.normalise_table(pd.read_excel(_f, dtype=str))
+                else:
+                    polys = gl.normalise_table(pd.read_csv(_f, dtype=str))
+            except Exception as _e:
+                st.error(f"Could not read the file: {_e}")
+    elif gl_src == "Polygons in this app":
+        _p = st.session_state.get("polygon_records_df")
+        if _p is None or len(_p) == 0:
+            st.markdown('<div class="sfx-warn">No polygons in the app yet. Generate them in Step 3, '
+                        'or choose another option above.</div>', unsafe_allow_html=True)
+        else:
+            polys = gl.normalise_table(_p)
+    else:
+        _gl_links = _mymaps_links()
+        _gl_by = {l["mid"]: l for l in _gl_links}
+        _gl_mid = st.selectbox("My Map", list(_gl_by), format_func=lambda m: _gl_by[m]["name"], key="gl_map")
+        _mm = _get_mymaps(_gl_by[_gl_mid]["url"]) if _gl_mid else None
+        if _mm is not None:
+            polys = gl.normalise_table(_mm["polygons"])
+
+    if polys is not None and len(polys):
+        _hubs_in = sorted(h for h in polys["Hub Name"].unique() if h)
+        if _hubs_in:
+            _many = gl_src == "Google My Maps" or len(_hubs_in) > 30
+            _sel = st.multiselect(f"Hubs ({len(_hubs_in)} in these polygons)", _hubs_in,
+                                  default=[] if _many else _hubs_in, key=f"gl_hubs_{gl_src}",
+                                  placeholder="Pick the hubs to send live")
+            polys = polys[polys["Hub Name"].isin(_sel)] if _sel else polys.iloc[0:0]
+        gl_action = st.radio("What should Saruman do?", ["Go live (activate)", "Switch off (deactivate)"],
+                             horizontal=True, key="gl_action",
+                             help="Sets the Description column: 'Clustering as per SOP' or 'Deactivated Clustering Payout'.")
+        st.caption(f"{len(polys):,} polygon(s) selected.")
+
+        st.markdown('<div class="sfx-header">2 · Check every row</div>', unsafe_allow_html=True)
+        _bq = st.session_state.get("bq_client")
+        if _bq is None:
+            st.markdown('<div class="sfx-err">BigQuery is not connected. Hub Ids and today\'s serviceability come from '
+                        'BigQuery: connect it with the status button at the top right.</div>', unsafe_allow_html=True)
+        elif len(polys):
+            _sig = (gl_src, gl_action, len(polys), hash(tuple(polys["Cluster_Code"])), hash(tuple(polys["Polygon WKT"].str[:60])))
+            if st.button(f"Check {len(polys):,} polygon(s)", type="primary", key="gl_check"):
+                with st.spinner("Looking up Hub Ids and today's serviceability in BigQuery..."):
+                    try:
+                        _pins = tuple(sorted(set(polys["Pincode"].str.strip()) | set(polys["Cluster_Code"].str[:6])))
+                        _svc = _gl_service(_bq, _pins)
+                        _names = tuple(sorted(set(polys["Hub Name"]) | {h for v in _svc.values() for h in v}))
+                        _ids = _gl_hub_ids(_bq, _names)
+                        st.session_state["gl_rows"] = gl.build_rows(polys, gl_action.startswith("Go live"), _ids, _svc)
+                        st.session_state["gl_sig"] = _sig
+                        add_log(f"Go Live: checked {len(polys)} polygons", "info")
+                    except Exception as _e:
+                        st.error(f"BigQuery lookup failed: {_e}")
+            rows = st.session_state.get("gl_rows") if st.session_state.get("gl_sig") == _sig else None
+            if rows is not None:
+                _n = rows["Status"].value_counts()
+                html_block(f'''<div class="kpi-row">
+                    <div class="kpi-card"><div class="kpi-label">Ready</div><div class="kpi-value">{_n.get(gl.OK, 0):,}</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Need a check</div><div class="kpi-value">{_n.get(gl.CHECK, 0):,}</div></div>
+                    <div class="kpi-card red"><div class="kpi-label">Errors (left out)</div><div class="kpi-value">{_n.get(gl.ERROR, 0):,}</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Hubs</div><div class="kpi-value">{rows["Hub Name"].replace("", pd.NA).nunique():,}</div></div>
+                </div>''')
+                _show = st.radio("Show", ["All rows", "Need a check", "Errors"], horizontal=True, key="gl_show")
+                _view = rows if _show == "All rows" else rows[rows["Status"] == (gl.CHECK if _show == "Need a check" else gl.ERROR)]
+                st.dataframe(_view.drop(columns=["Boundary"]), hide_index=True, width="stretch", height=380,
+                             column_config={"Hub Id": st.column_config.NumberColumn(format="%d"),
+                                            "Problem": st.column_config.TextColumn(width="large")})
+
+                st.markdown('<div class="sfx-header">3 · Download the upload file</div>', unsafe_allow_html=True)
+                _inc = st.checkbox(f"Include the {_n.get(gl.CHECK, 0):,} row(s) that need a check (after you have reviewed them)",
+                                   value=True, key="gl_inc") if _n.get(gl.CHECK, 0) else True
+                _main = gl.main_sheet(rows, include_checks=_inc)
+                if _main.empty:
+                    st.markdown('<div class="sfx-warn">No rows to upload. Fix the errors above first.</div>', unsafe_allow_html=True)
+                else:
+                    _base = f"payout_cluster_upload_{datetime.now().strftime('%Y%m%d_%H%M')}"
+                    st.caption(f"{len(_main):,} row(s) in the same layout as the 'Main sheet' tab "
+                               f"(Hub Id, Cluster Code, Description, Boundary, Cluster Category, Pincode, Surge Amount). "
+                               f"Upload it in Saruman → Geocode → Upload payout cluster.")
+                    _d1, _d2, _ = st.columns([1, 1, 2])
+                    with _d1:
+                        st.download_button("⬇ Excel (.xlsx)", gl.to_xlsx(_main), f"{_base}.xlsx", type="primary",
+                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                           key="gl_dl_xlsx", width="stretch")
+                    with _d2:
+                        st.download_button("⬇ CSV", gl.to_csv(_main), f"{_base}.csv", "text/csv",
+                                           key="gl_dl_csv", width="stretch")
+                    with st.expander("Preview the upload rows"):
+                        st.dataframe(_main, hide_index=True, width="stretch", height=260)
+
 
 # ═══════════════════════════════════════════════════════
 # BOTTOM — Activity Log (always visible via expander)

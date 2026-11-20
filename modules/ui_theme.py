@@ -86,7 +86,7 @@ hr { border-color:var(--line) !important; }
   overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
 .st-key-sfx_top [data-testid="stRadioGroup"]::-webkit-scrollbar { display:none; }
 .st-key-sfx_top [data-testid="stRadioGroup"] > div { flex:none; display:flex; margin:0; }
-.st-key-sfx_top [data-testid="stRadioOption"] { position:relative; margin:0 !important; padding:0 14px; height:100%; display:flex;
+.st-key-sfx_top [data-testid="stRadioOption"] { position:relative; margin:0 !important; padding:0 10px; height:100%; display:flex;
   align-items:center; cursor:pointer; white-space:nowrap; background:transparent; }
 .st-key-sfx_top [data-testid="stRadioOption"] > div { padding:0; gap:0; }
 .st-key-sfx_top [data-testid="stRadioOption"] > div > div:first-child:not([data-testid]) { display:none; }  /* radio circle */
@@ -276,7 +276,8 @@ iframe { border-radius:12px; }
   .st-key-sfx_top [data-testid="stRadioOption"][data-selected="true"]::after { left:8px; right:8px; }
   .st-key-sfx_top [data-testid="stPopoverButton"] p { max-width:180px; }
 }
-@media (max-width:1280px) {
+/* 8 tabs: the portal name gives way below 1400px so every tab stays visible */
+@media (max-width:1400px) {
   .sfx-brand .t { display:none; }
 }
 @media (max-width:1140px) {
@@ -284,8 +285,10 @@ iframe { border-radius:12px; }
   .st-key-sfx_top [data-testid="stPopoverButton"] p { max-width:140px; }
   .sfx-hero { grid-template-columns:1fr; padding:28px 26px; }
 }
-@media (max-width:900px) {
-  :root { --hdr:112px; --gutter:12px; --hpad:14px; }
+/* Two-row header (logo + status, then a full-width tab row) from 1100px down:
+   8 tabs don't fit beside the logo on small laptops and tablets. */
+@media (max-width:1100px) {
+  :root { --hdr:112px; }
   .st-key-sfx_top [data-testid="stHorizontalBlock"] { flex-wrap:wrap !important; gap:0 12px; align-content:stretch; }
   .st-key-sfx_top [data-testid="stColumn"]:nth-child(1) { flex:1 1 auto !important; height:64px; display:flex; align-items:center; }
   .st-key-sfx_top [data-testid="stColumn"]:nth-child(2) { order:3; flex:1 1 100% !important; width:100% !important; height:47px;
@@ -293,6 +296,9 @@ iframe { border-radius:12px; }
   .st-key-sfx_top [data-testid="stColumn"]:nth-child(3) { order:2; height:64px; display:flex; align-items:center; }
   .st-key-sfx_top [data-testid="stColumn"]:nth-child(odd) > [data-testid="stVerticalBlock"] { justify-content:center; height:100%; }
   .st-key-sfx_top [class*="st-key-sfx_conn_"] { justify-content:center; align-items:flex-end; }
+}
+@media (max-width:900px) {
+  :root { --gutter:12px; --hpad:14px; }
   .sfx-brand img { height:40px; }
   .st-key-sfx_top [data-testid="stRadioOption"] { padding:0 12px; } .st-key-sfx_top [data-testid="stRadioOption"] p { font-size:13px; }
   .st-key-sfx_top [data-testid="stRadioOption"][data-selected="true"]::after { left:8px; right:8px; }

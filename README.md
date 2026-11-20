@@ -93,6 +93,7 @@ Clustering-web-app/
 │   ├── bigquery_client.py          # BigQuery client + OAuth flow
 │   ├── duckdb_store.py             # Local DuckDB session cache
 │   ├── boundary_store.py           # Pincode-indexed boundary store (reads only needed pincodes)
+│   ├── golive.py                   # Go Live: Saruman payout-cluster upload file + row checks
 │   └── ui_theme.py                 # Shadowfax UI kit: CSS, header, hero, footer
 │
 ├── utils/
