@@ -661,11 +661,17 @@ if st.session_state.get("auto_run_requested"):
 _MYMAPS_LINKS_FILE = os.path.join(OUTPUT_DIR, "mymaps_links.json")
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def _load_mymaps(url_or_id):
-    """Fetch + parse one My Maps map's KML. Cached 15 min; 'Refresh' clears it."""
+_MYMAPS_MAX_AGE = 900  # seconds a reading of a map counts as current (here and on disk)
+
+
+@st.cache_data(ttl=_MYMAPS_MAX_AGE, show_spinner=False)
+def _load_mymaps(url_or_id, live=False):
+    """Fetch + parse one My Maps map's KML. Cached 15 min; 'Refresh' clears it.
+    Unless `live`, a copy downloaded less than 15 min ago (kept on disk) is reused,
+    e.g. after a restart, so the map isn't downloaded again within the same 15 min."""
     from modules.mymaps_connector import load_map
-    return load_map(url_or_id, cache_dir=os.path.join(OUTPUT_DIR, "mymaps_cache"))
+    return load_map(url_or_id, cache_dir=os.path.join(OUTPUT_DIR, "mymaps_cache"),
+                    max_age=0 if live else _MYMAPS_MAX_AGE)
 
 
 @st.cache_data(ttl=900, show_spinner=False, max_entries=8)
@@ -692,12 +698,13 @@ def _mymaps_links():
     return merge_links(configured_links(_sec), load_saved_links(_MYMAPS_LINKS_FILE))
 
 
-def _get_mymaps(url, quiet=False):
-    """Return the loaded map dict, or None (showing the error unless quiet)."""
+def _get_mymaps(url, quiet=False, live=False):
+    """Return the loaded map dict, or None (showing the error unless quiet).
+    live=True (after 'Refresh from My Maps') always downloads from Google."""
     from modules.mymaps_connector import MyMapsError
     try:
         with st.spinner("Reading polygons from Google My Maps..."):
-            return _load_mymaps(url)
+            return _load_mymaps(url, live=live)
     except MyMapsError as e:
         if not quiet:
             st.error(f"Google My Maps: {e}")
@@ -2426,11 +2433,13 @@ elif nav.startswith("7"):
                  "Find Polygon can search all maps at once.")
     with _sw2:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        _mm_live = False  # True only in the run where Refresh was clicked
         if st.button("🔄 Refresh from My Maps", key="mm_refresh", width="stretch",
                      help="Re-read all maps now (otherwise each is re-read every 15 minutes)."):
             _load_mymaps.clear()
             _mymaps_all_csv.clear()
             _mymaps_hub_summary.clear()
+            _mm_live = True
             # Also reload the embedded live map (a changed src forces the iframe to reload).
             st.session_state["mm_embed_rev"] = st.session_state.get("mm_embed_rev", 0) + 1
             add_log("My Maps refreshed", "info")
@@ -2485,7 +2494,7 @@ elif nav.startswith("7"):
                 language="toml")
 
     _edit_link = f"https://www.google.com/maps/d/edit?mid={_active_mid}"
-    mm = _get_mymaps(_active["url"])  # None if the KML can't be read -- the live view below still works
+    mm = _get_mymaps(_active["url"], live=_mm_live)  # None if the KML can't be read -- the live view below still works
 
     tab_live, tab_hub, tab_find, tab_all = st.tabs(["🗺 Live My Maps", "By Hub", "Find Polygon", "All Hubs Overview"])
 
@@ -2564,7 +2573,7 @@ elif nav.startswith("7"):
         if _q.strip() and _search_mids:
             _found_parts, _pts_parts, _failed = [], [], []
             for _m in _search_mids:
-                _md = mm if _m == _active_mid and mm is not None else _get_mymaps(_by_mid[_m]["url"], quiet=True)
+                _md = mm if _m == _active_mid and mm is not None else _get_mymaps(_by_mid[_m]["url"], quiet=True, live=_mm_live)
                 if _md is None:
                     _failed.append(_by_mid[_m]["name"])
                     continue

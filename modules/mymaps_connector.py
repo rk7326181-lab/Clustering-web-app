@@ -43,6 +43,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -115,8 +116,13 @@ def _cache_path(mid: str, cache_dir: str | None) -> str:
 # ─────────────────────────────────────────────────────────────
 # Fetch
 # ─────────────────────────────────────────────────────────────
-def fetch_kml(mid: str, timeout: int = 90, cache_dir: str | None = None) -> tuple[bytes, dict]:
+def fetch_kml(mid: str, timeout: int = 90, cache_dir: str | None = None,
+              max_age: float = 0) -> tuple[bytes, dict]:
     """Download the map's KML. Returns ``(kml_bytes, info)``.
+
+    ``max_age`` (seconds): if the last download kept in ``cache_dir`` is younger
+    than this, use it without contacting Google (``info["source"] = "recent-copy"``,
+    ``fetched_at`` = when it was really downloaded). 0 = always download.
 
     On a network failure, falls back to the last successful download kept in
     ``cache_dir`` (``info["stale"] = True``) so the portal keeps working when
@@ -125,6 +131,11 @@ def fetch_kml(mid: str, timeout: int = 90, cache_dir: str | None = None) -> tupl
     """
     url = KML_EXPORT_URL.format(mid=mid)
     path = _cache_path(mid, cache_dir)
+    if max_age > 0 and os.path.exists(path) and time.time() - os.path.getmtime(path) < max_age:
+        with open(path, "rb") as f:
+            data = f.read()
+        return data, {"source": "recent-copy", "stale": False, "fetched_at": os.path.getmtime(path),
+                      "bytes": len(data), "url": url}
     try:
         resp = requests.get(url, timeout=timeout,
                             headers={"User-Agent": "Mozilla/5.0 (clustering-web-app)"})
@@ -190,7 +201,24 @@ def _child_text(el, name: str) -> str:
     return ""
 
 
-def _parse_coords(text: str) -> list[tuple[float, float]]:
+def _parse_coords(text: str):
+    """KML 'lon,lat[,alt] lon,lat[,alt] ...' -> (n, 2) float array of (lon, lat).
+    Parsed in one NumPy call (the per-token Python loop was the single biggest
+    cost of reading a large map); falls back to the tolerant loop when the
+    tokens are irregular (mixed 2D/3D points or bad numbers)."""
+    toks = (text or "").split()
+    if toks:
+        dims = toks[0].count(",") + 1
+        if dims >= 2 and all(t.count(",") == dims - 1 for t in toks):
+            try:
+                return np.array(",".join(toks).split(","), dtype=float).reshape(-1, dims)[:, :2]
+            except ValueError:
+                pass
+    pts = _parse_coords_loop(text)
+    return np.array(pts, dtype=float).reshape(-1, 2) if pts else np.empty((0, 2))
+
+
+def _parse_coords_loop(text: str) -> list[tuple[float, float]]:
     pts = []
     for tok in (text or "").split():
         parts = tok.split(",")
@@ -238,7 +266,7 @@ def _placemark_point(pm):
         if _local(el.tag) == "Point":
             for ch in el.iter():
                 if _local(ch.tag) == "coordinates":
-                    pts = _parse_coords(ch.text)
+                    pts = _parse_coords_loop(ch.text)
                     if pts:
                         return pts[0]
     return None
@@ -378,7 +406,7 @@ def parse_kml(kml_bytes: bytes) -> tuple[pd.DataFrame, pd.DataFrame, str]:
             "Cluster_Code": code,
             "Description": rate,
             "Cluster_Category": cat,
-            "Polygon WKT": geom.wkt,
+            "Polygon WKT": None,  # filled below in one vectorised call
             "Layer": layer,
             "Hub Source": "mymaps" if hub else "",
             "_geom": geom,
@@ -390,6 +418,11 @@ def parse_kml(kml_bytes: bytes) -> tuple[pd.DataFrame, pd.DataFrame, str]:
         pdf = pd.DataFrame(columns=POLYGON_COLUMNS + ["Hub Source", "_geom"])
     if hdf.empty:
         hdf = pd.DataFrame(columns=HUB_COLUMNS + ["_prefixed"])
+
+    if len(pdf):
+        import shapely
+        # identical to geom.wkt per row (Shapely's .wkt is to_wkt(rounding_precision=-1))
+        pdf["Polygon WKT"] = shapely.to_wkt(np.asarray(pdf["_geom"].tolist(), dtype=object), rounding_precision=-1)
 
     _infer_missing_hubs(pdf, hdf)
     pdf = pdf.drop(columns=["_geom"])
@@ -437,11 +470,46 @@ def _infer_missing_hubs(pdf: pd.DataFrame, hdf: pd.DataFrame) -> None:
             pdf.loc[grp.index, "Hub Source"] = "inferred-nearest-hub"
 
 
-def load_map(url_or_id: str, cache_dir: str | None = None, timeout: int = 90) -> dict:
-    """Fetch + parse a My Maps map. Returns a dict with polygons, hubs, title, info."""
+# Bump whenever parse_kml's output changes, so old parsed copies are not reused.
+PARSER_VERSION = 1
+
+
+def _parse_kml_cached(mid: str, data: bytes, cache_dir: str | None):
+    """parse_kml(data), reusing the saved result when the downloaded KML is byte-for-byte
+    the same as last time (the usual case: the map is re-downloaded every 15 min and
+    after every restart, but edited far less often). Parsing a large map takes seconds;
+    loading the saved result takes a fraction of one. Best-effort: any problem with the
+    saved copy just means parsing again."""
+    import hashlib
+    import pickle
+    digest = hashlib.sha1(data).hexdigest()[:16]
+    base = os.path.splitext(_cache_path(mid, cache_dir))[0]
+    path = f"{base}.parsed-v{PARSER_VERSION}-{digest}.pkl"
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f)  # written by this app into its own cache folder
+    except Exception:
+        pass
+    result = parse_kml(data)
+    try:
+        for old in os.listdir(os.path.dirname(path)):   # keep only the newest parse per map
+            if old.startswith(os.path.basename(base) + ".parsed-") and old != os.path.basename(path):
+                os.remove(os.path.join(os.path.dirname(path), old))
+        with open(path + ".tmp", "wb") as f:
+            pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+    return result
+
+
+def load_map(url_or_id: str, cache_dir: str | None = None, timeout: int = 90,
+             max_age: float = 0) -> dict:
+    """Fetch + parse a My Maps map. Returns a dict with polygons, hubs, title, info.
+    ``max_age``: see fetch_kml (reuse a download younger than this many seconds)."""
     mid = extract_map_id(url_or_id)
-    data, info = fetch_kml(mid, timeout=timeout, cache_dir=cache_dir)
-    polygons, hubs, title = parse_kml(data)
+    data, info = fetch_kml(mid, timeout=timeout, cache_dir=cache_dir, max_age=max_age)
+    polygons, hubs, title = _parse_kml_cached(mid, data, cache_dir)
     info["mid"] = mid
     return {"polygons": polygons, "hubs": hubs, "title": title, "info": info}
 
