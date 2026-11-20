@@ -2756,6 +2756,7 @@ elif nav.startswith("7"):
 # ═══════════════════════════════════════════════════════
 elif nav.startswith("8"):
     from modules import golive as gl
+    import html as _html
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def _gl_hub_info(_client, names):
@@ -2922,17 +2923,138 @@ elif nav.startswith("8"):
                     _base = f"payout_cluster_upload_{datetime.now().strftime('%Y%m%d_%H%M')}"
                     st.caption(f"{len(_main):,} row(s) in the same layout as the 'Main sheet' tab "
                                f"(Hub Id, Cluster Code, Description, Boundary, Cluster Category, Pincode, Surge Amount). "
-                               f"Upload it in Saruman → Geocode → Upload payout cluster.")
-                    _d1, _d2, _ = st.columns([1, 1, 2])
-                    with _d1:
-                        st.download_button("⬇ Excel (.xlsx)", gl.to_xlsx(_main), f"{_base}.xlsx", type="primary",
-                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                           key="gl_dl_xlsx", width="stretch")
-                    with _d2:
-                        st.download_button("⬇ CSV", gl.to_csv(_main), f"{_base}.csv", "text/csv",
-                                           key="gl_dl_csv", width="stretch")
+                               f"Upload it in Saruman → Geocode → Upload payout cluster (Excel only; Saruman rejects CSV).")
+                    st.download_button("⬇ Upload file (.xlsx)", gl.to_xlsx(_main), f"{_base}.xlsx", type="primary",
+                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       key="gl_dl_xlsx", help="Saruman accepts .xls/.xlsx only.")
                     with st.expander("Preview the upload rows"):
                         st.dataframe(_main, hide_index=True, width="stretch", height=260)
+
+                    # ── 5 · Send live: Saruman upload + My Maps push (desktop mode) ──
+                    st.markdown('<div class="sfx-header">5 · Send live</div>', unsafe_allow_html=True)
+                    from modules import desktop as dk
+                    if not dk.is_desktop():
+                        st.markdown(
+                            '<div class="sfx-card"><div class="ttl">Upload to Saruman and push to My Maps from your laptop</div>'
+                            'Saruman only opens inside the Shadowfax network, and Google My Maps has no way for a website '
+                            'to write to it, so these two buttons work in <b>desktop mode</b>: on your laptop (on office '
+                            'Wi-Fi or VPN) double-click <code>deploy\\Start-Desktop.bat</code> in the app folder. Here, '
+                            'download the file above and upload it in Saruman as usual.</div>', unsafe_allow_html=True)
+                    else:
+                        _st = st.session_state.get("gl_robot_status")
+                        _s1, _s2, _s3 = st.columns([2, 1, 1])
+                        with _s1:
+                            if _st:
+                                _yn = lambda v: "✅" if v else ("—" if v is None else "❌")
+                                st.markdown(f"Robot window {_yn(_st['chrome'])} · Google sign-in {_yn(_st['google'])} · "
+                                            f"Saruman login {_yn(_st['saruman'])}")
+                            else:
+                                st.caption("The robot works in its own Chrome window. Sign in to Google (and Saruman) "
+                                           "there once; it is remembered.")
+                        with _s2:
+                            if st.button("Open robot window", key="gl_robot_open", width="stretch"):
+                                try:
+                                    dk.start_chrome()
+                                except dk.RobotError as _e:
+                                    st.error(str(_e))
+                        with _s3:
+                            if st.button("Check sign-in", key="gl_robot_check", width="stretch"):
+                                with st.spinner("Checking the robot window..."):
+                                    st.session_state["gl_robot_status"] = dk.status()
+                                st.rerun()
+
+                        _tab_sar, _tab_mm = st.tabs(["Upload to Saruman", "Push to My Maps"])
+                        with _tab_sar:
+                            _hubs_up = sorted(rows.loc[rows["Status"] != gl.ERROR, "Hub Name"].unique())
+                            _err_hubs = sorted(set(rows.loc[rows["Status"] == gl.ERROR, "Hub Name"]) & set(_hubs_up))
+                            st.markdown(
+                                f'<div class="sfx-warn"><b>Saruman replaces every cluster of each hub in the file</b> '
+                                f'(at midnight), and rejects the whole file if any row is invalid. This file has '
+                                f'{len(_main):,} cluster(s) for {len(_hubs_up)} hub(s): {", ".join(_hubs_up[:12])}'
+                                f'{" ..." if len(_hubs_up) > 12 else ""}.</div>', unsafe_allow_html=True)
+                            _ok_to_send = True
+                            if _err_hubs:
+                                _ok_to_send = False
+                                st.markdown(f'<div class="sfx-err">Fix the errors first: {", ".join(_err_hubs)} would lose the '
+                                            f'clusters that are left out of the file.</div>', unsafe_allow_html=True)
+                            if gl_src in ("Paste rows", "Upload a file"):
+                                _ok_to_send &= st.checkbox("This file contains every cluster of each of these hubs",
+                                                           key="gl_all_clusters")
+                            _ok_to_send &= st.checkbox("I have checked the preview and want these clusters to go live",
+                                                       key="gl_confirm_live")
+                            if st.button(f"Upload {len(_main):,} cluster(s) to Saruman", type="primary",
+                                         disabled=not _ok_to_send, key="gl_saruman_go"):
+                                with st.spinner("Uploading to Saruman in the robot window..."):
+                                    try:
+                                        _res = dk.upload_to_saruman(gl.to_xlsx(_main), f"{_base}.xlsx")
+                                        st.session_state["gl_saruman_result"] = _res
+                                        add_log(f"Saruman upload: {'OK' if _res['ok'] else 'FAILED'} ({len(_main)} clusters, "
+                                                f"{len(_hubs_up)} hubs) - {_res['message'][:120]}",
+                                                "success" if _res["ok"] else "error")
+                                    except dk.RobotError as _e:
+                                        st.session_state["gl_saruman_result"] = {"ok": False, "message": str(_e), "screenshot": None}
+                            _res = st.session_state.get("gl_saruman_result")
+                            if _res:
+                                st.markdown(f'<div class="{"sfx-ok" if _res["ok"] else "sfx-err"}"><b>'
+                                            f'{"Uploaded" if _res["ok"] else "Not uploaded"}</b>: {_html.escape(_res["message"])}</div>',
+                                            unsafe_allow_html=True)
+                                if _res.get("screenshot"):
+                                    with st.expander("What Saruman showed"):
+                                        st.image(_res["screenshot"], width="stretch")
+
+                        with _tab_mm:
+                            _mm_rows = _pv_polys
+                            _gl_links2 = _mymaps_links()
+                            _gl_by2 = {l["mid"]: l for l in _gl_links2}
+                            _opts2 = list(_gl_by2) + ["__other__"]
+                            _pick2 = st.selectbox("My Map", _opts2, key="gl_push_map",
+                                                  format_func=lambda m: "Another map (paste its link)" if m == "__other__"
+                                                  else _gl_by2[m]["name"])
+                            _mm_mid = _pick2
+                            if _pick2 == "__other__":
+                                from modules.mymaps_connector import extract_map_id
+                                _lnk = st.text_input("My Maps link", key="gl_push_link",
+                                                     placeholder="https://www.google.com/maps/d/edit?mid=...")
+                                try:
+                                    _mm_mid = extract_map_id(_lnk) if _lnk.strip() else None
+                                except Exception:
+                                    _mm_mid = None
+                                    st.caption("That doesn't look like a My Maps link.")
+                            if _mm_mid and st.button("Load layers", key="gl_push_layers"):
+                                with st.spinner("Reading the map's layers in the robot window..."):
+                                    try:
+                                        st.session_state["gl_push_layer_list"] = (_mm_mid, dk.map_layers(_mm_mid)[1])
+                                    except dk.RobotError as _e:
+                                        st.error(str(_e))
+                            _ll = st.session_state.get("gl_push_layer_list")
+                            if _ll and _ll[0] == _mm_mid:
+                                _layer = st.selectbox("Layer", list(_ll[1]), key="gl_push_layer",
+                                                      format_func=lambda l: f"{l}  ({_ll[1][l]:,} polygons)")
+                                st.caption("Polygons whose Cluster Code is already in the layer are updated (shape and "
+                                           "category); new codes are added. Nothing else in the map changes.")
+                                if st.button(f"Push {len(_mm_rows):,} polygon(s) to '{_layer}'", type="primary",
+                                             key="gl_push_go"):
+                                    with st.status("Pushing to Google My Maps...", expanded=True) as _sts:
+                                        try:
+                                            _r = dk.push_to_mymaps(_mm_mid, _layer, _mm_rows, progress=st.write)
+                                            st.session_state["gl_push_result"] = _r
+                                            _sts.update(label="Done", state="complete" if not _r["missing"] else "error")
+                                            add_log(f"My Maps push to {_layer}: {_r['updated']} updated, {_r['added']} added, "
+                                                    f"{_r['verified']} verified", "success" if not _r["missing"] else "warning")
+                                        except dk.RobotError as _e:
+                                            st.session_state["gl_push_result"] = {"error": str(_e)}
+                                            _sts.update(label="Not pushed", state="error")
+                                    _load_mymaps.clear()
+                                _r = st.session_state.get("gl_push_result")
+                                if _r and "error" in _r:
+                                    st.markdown(f'<div class="sfx-err">{_html.escape(_r["error"])}</div>', unsafe_allow_html=True)
+                                elif _r:
+                                    st.markdown(
+                                        f'<div class="{"sfx-ok" if not _r["missing"] else "sfx-warn"}">Layer <b>{_html.escape(_r["layer"])}</b>: '
+                                        f'{_r["updated"]} updated, {_r["added"]} added, {_r["verified"]} confirmed on the map'
+                                        f'{"; missing: " + ", ".join(_r["missing"]) if _r["missing"] else ""}'
+                                        f'{"; appears more than once: " + ", ".join(_r["duplicates"]) if _r["duplicates"] else ""}.</div>',
+                                        unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════

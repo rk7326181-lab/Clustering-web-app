@@ -168,3 +168,28 @@ deploy\Restart-App.bat
 - If BigQuery shows "not connected", the Gmail token has likely expired
   (~every 2 days under this workspace's policy) — open the status button
   (top right) for the Connections panel's instructions, or run `generate_bq_token.py` and update `.streamlit\secrets.toml`.
+
+## Desktop mode (Go Live → Upload to Saruman / Push to My Maps)
+
+Two Go Live actions cannot run on Streamlit Cloud:
+
+* **Upload to Saruman**: `sarumanadmin.shadowfax.in` only resolves inside the
+  Shadowfax network (10.101.0.131), so it needs a laptop on office Wi-Fi or VPN.
+* **Push to Google My Maps**: Google has no API to write to My Maps, so a robot
+  drives the My Maps website in a signed-in Chrome window ("Reimport and merge →
+  Merge matching items" for polygons already in the layer, "Add more items" for
+  new ones), then reads the map back to confirm every polygon.
+
+Start it on the laptop by double-clicking **`deploy\Start-Desktop.bat`**: it sets
+`GEO_PORTAL_DESKTOP=1`, installs `requirements-desktop.txt` (Playwright, which
+drives the installed Chrome) if needed, and opens the app at
+http://localhost:8501. In Go Live → step 5, click **Open robot window** and sign
+in there once to Google (and Saruman; Chrome's password manager fills the shared
+login). The robot window has its own Chrome profile in
+`%LOCALAPPDATA%\GeoPortal\robot-chrome`; the app never stores a password.
+
+Safeguards: Saruman replaces *every* cluster of each hub in the file at midnight
+and rejects the whole file on any invalid row, so the upload is blocked while
+any of a hub's clusters has an error, pasted/uploaded files need a "contains every
+cluster of each hub" confirmation, and nothing is uploaded without the
+"I have checked the preview" confirmation.

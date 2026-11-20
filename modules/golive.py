@@ -163,6 +163,8 @@ def build_rows(polys, description, hub_id_map, svc_map):
         catn = category_number(r.get("Cluster_Category"))
         if catn is None:
             problems.append((ERROR, f"Category '{r.get('Cluster_Category', '')}' should look like C3"))
+        elif not 1 <= catn <= 20:
+            problems.append((ERROR, f"Category {catn} is outside 1-20 (Saruman only accepts 1 to 20)"))
         boundary, bprob = boundary_text(r.get("Polygon WKT", ""))
         if bprob:
             problems.append(bprob)

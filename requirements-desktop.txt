@@ -1,0 +1,5 @@
+# Desktop mode only (deploy\Start-Desktop.bat). NOT installed on Streamlit Cloud.
+# Playwright drives the laptop's installed Google Chrome (no browser download) for
+# Go Live -> "Upload to Saruman" and "Push to My Maps". See modules/desktop.py.
+-r requirements.txt
+playwright>=1.48
