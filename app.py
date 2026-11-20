@@ -181,8 +181,10 @@ def _add_map_backdrop(ax):
     party to ever block, rate-limit, or paywall.
     """
     try:
-        import contextily as ctx
-        ctx.add_basemap(ax, source=ctx.providers.Esri.WorldStreetMap, zoom="auto", zorder=0)
+        # modules.tiles (plain HTTP + Pillow): contextily needs rasterio, which Windows
+        # Application Control blocks on work laptops.
+        from modules import tiles
+        tiles.add_to_axes(ax)
     except Exception:
         pass
     try:
@@ -2756,8 +2758,13 @@ elif nav.startswith("8"):
     from modules import golive as gl
 
     @st.cache_data(ttl=3600, show_spinner=False)
-    def _gl_hub_ids(_client, names):
-        return gl.hub_ids(_client, names)
+    def _gl_hub_info(_client, names):
+        return gl.hub_info(_client, names)
+
+    @st.cache_data(ttl=3600, show_spinner=False, max_entries=24)
+    def _gl_photo(_polys, _hubs, hub, sig):
+        from modules.mymaps_connector import get_hub_polygons, render_png
+        return render_png(get_hub_polygons(_polys, hub), _hubs[_hubs["Hub Name"] == hub], hub, source="Go Live preview")
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def _gl_service(_client, pins):
@@ -2813,9 +2820,10 @@ elif nav.startswith("8"):
                                   default=[] if _many else _hubs_in, key=f"gl_hubs_{gl_src}",
                                   placeholder="Pick the hubs to send live")
             polys = polys[polys["Hub Name"].isin(_sel)] if _sel else polys.iloc[0:0]
-        gl_action = st.radio("What should Saruman do?", ["Go live (activate)", "Switch off (deactivate)"],
-                             horizontal=True, key="gl_action",
-                             help="Sets the Description column: 'Clustering as per SOP' or 'Deactivated Clustering Payout'.")
+        _desc_opt = st.selectbox("Description (what Saruman should do)", gl.DESCRIPTIONS + ["Other (type it)"],
+                                 key="gl_desc", help="Fills the Description column. 'Deactivated Clustering Payout' switches "
+                                                      "the clusters off.")
+        gl_action = (st.text_input("Description text", key="gl_desc_other").strip() or gl.DESC_ACTIVATE)             if _desc_opt.startswith("Other") else _desc_opt
         st.caption(f"{len(polys):,} polygon(s) selected.")
 
         st.markdown('<div class="sfx-header">2 · Check every row</div>', unsafe_allow_html=True)
@@ -2831,8 +2839,9 @@ elif nav.startswith("8"):
                         _pins = tuple(sorted(set(polys["Pincode"].str.strip()) | set(polys["Cluster_Code"].str[:6])))
                         _svc = _gl_service(_bq, _pins)
                         _names = tuple(sorted(set(polys["Hub Name"]) | {h for v in _svc.values() for h in v}))
-                        _ids = _gl_hub_ids(_bq, _names)
-                        st.session_state["gl_rows"] = gl.build_rows(polys, gl_action.startswith("Go live"), _ids, _svc)
+                        _info = _gl_hub_info(_bq, _names)
+                        st.session_state["gl_rows"] = gl.build_rows(polys, gl_action, {k: v["id"] for k, v in _info.items()}, _svc)
+                        st.session_state["gl_info"] = _info
                         st.session_state["gl_sig"] = _sig
                         add_log(f"Go Live: checked {len(polys)} polygons", "info")
                     except Exception as _e:
@@ -2852,7 +2861,58 @@ elif nav.startswith("8"):
                              column_config={"Hub Id": st.column_config.NumberColumn(format="%d"),
                                             "Problem": st.column_config.TextColumn(width="large")})
 
-                st.markdown('<div class="sfx-header">3 · Download the upload file</div>', unsafe_allow_html=True)
+                # ── 3 · Preview: polygons, rates and the registered hub location, per hub ──
+                _pv_polys, _pv_hubs = gl.preview_frames(rows, st.session_state.get("gl_info", {}))
+                if len(_pv_polys):
+                    st.markdown('<div class="sfx-header">3 · Preview before you upload</div>', unsafe_allow_html=True)
+                    st.caption("Check each hub: polygons coloured and labelled by rate, and the hub pin at the location "
+                               "registered in Shadowfax's hub list.")
+                    _pv_hub_list = sorted(_pv_polys["Hub Name"].unique())
+                    _pv_hub = st.selectbox(f"Hub to preview ({len(_pv_hub_list)})", _pv_hub_list, key="gl_pv_hub")
+                    _pv_sub = _pv_polys[_pv_polys["Hub Name"] == _pv_hub]
+                    _km = gl.hub_distance_km(_pv_polys, _pv_hubs, _pv_hub)
+                    _rates = (_pv_sub.groupby(["Cluster_Category", "Description"]).size().reset_index(name="n")
+                              .assign(k=lambda d: d["Cluster_Category"].str[1:].astype(int)).sort_values("k"))
+                    _hub_row = _pv_hubs[_pv_hubs["Hub Name"] == _pv_hub]
+                    _loc = (f'{float(_hub_row["Hub_lat"].iloc[0]):.5f}, {float(_hub_row["Hub_long"].iloc[0]):.5f}'
+                            if len(_hub_row) else "not in hub list")
+                    html_block(f'''<div class="kpi-row">
+                        <div class="kpi-card"><div class="kpi-label">Polygons</div><div class="kpi-value">{len(_pv_sub)}</div></div>
+                        <div class="kpi-card"><div class="kpi-label">Pincodes</div><div class="kpi-value">{_pv_sub["Pincode"].nunique()}</div></div>
+                        <div class="kpi-card"><div class="kpi-label">Rates</div><div class="kpi-value">{" · ".join(_rates["Description"].unique())}</div></div>
+                        <div class="kpi-card {"red" if (_km or 0) > 25 else ""}"><div class="kpi-label">Hub to nearest polygon</div><div class="kpi-value">{"—" if _km is None else f"{_km:g} km"}</div></div>
+                    </div>''')
+                    if _km is not None and _km > 25:
+                        st.markdown(f'<div class="sfx-warn">The registered location of <b>{_pv_hub}</b> ({_loc}) is {_km:g} km '
+                                    f'from its nearest polygon. Check that these polygons belong to this hub.</div>',
+                                    unsafe_allow_html=True)
+                    _pt1, _pt2 = st.tabs(["Map", "Photo"])
+                    with _pt1:
+                        try:
+                            from modules.visualizer import create_polygon_map
+                            _m = create_polygon_map(_pv_sub, _hub_row, None, False, "none", None, None, None, show_rate_labels=True)
+                            st.iframe(_m._repr_html_(), height=560) if _m is not None else st.caption("Nothing to draw.")
+                        except Exception as _e:
+                            st.caption(f"Map unavailable: {_e}")
+                        st.caption(f"Hub location (Shadowfax hub list): {_loc}")
+                    with _pt2:
+                        _psig = hash((tuple(_pv_sub["Cluster_Code"]), tuple(_pv_sub["Polygon WKT"].str[:40])))
+                        _png = _gl_photo(_pv_polys, _pv_hubs, _pv_hub, _psig)
+                        st.image(_png, caption=f"{_pv_hub}: polygons by rate on a street map", width="stretch")
+                        _c1, _c2, _ = st.columns([1, 1, 2])
+                        with _c1:
+                            st.download_button("⬇ This hub's photo", _png, f"{_pv_hub}.png", "image/png",
+                                               key="gl_pv_png", width="stretch")
+                        with _c2:
+                            def _all_photos(_p=_pv_polys, _h=_pv_hubs, _l=tuple(_pv_hub_list)):
+                                from modules.mymaps_connector import photos_zip, render_hub_photos
+                                return photos_zip(render_hub_photos(_p, _h, list(_l)))
+                            st.download_button(f"⬇ All {len(_pv_hub_list)} hub photos (.zip)",
+                                               _all_photos if _LAZY_DL else _all_photos(),
+                                               f"golive_preview_{datetime.now().strftime('%Y%m%d')}.zip", "application/zip",
+                                               key="gl_pv_zip", width="stretch")
+
+                st.markdown('<div class="sfx-header">4 · Download the upload file</div>', unsafe_allow_html=True)
                 _inc = st.checkbox(f"Include the {_n.get(gl.CHECK, 0):,} row(s) that need a check (after you have reviewed them)",
                                    value=True, key="gl_inc") if _n.get(gl.CHECK, 0) else True
                 _main = gl.main_sheet(rows, include_checks=_inc)

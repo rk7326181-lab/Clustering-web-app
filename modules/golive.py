@@ -24,7 +24,9 @@ import pandas as pd
 
 MAIN_COLUMNS = ["Hub Id", "Cluster Code", "Description", "Boundary", "Cluster Category", "Pincode", "Surge Amount"]
 DESC_ACTIVATE = "Clustering as per SOP"
+DESC_CRITICAL = "Clustering For Critical area"
 DESC_DEACTIVATE = "Deactivated Clustering Payout"
+DESCRIPTIONS = [DESC_ACTIVATE, DESC_CRITICAL, DESC_DEACTIVATE]  # values seen in real upload files
 _CODE_RE = re.compile(r"^(\d{6})_[A-Z]+$")
 _BQ = "data-warehousing-391512"
 
@@ -32,16 +34,21 @@ OK, CHECK, ERROR = "OK", "Check", "Error"
 
 
 # ── BigQuery lookups ─────────────────────────────────────────────────────────
-def hub_ids(client, hub_names):
-    """{hub name: Hub Id} from ecommerce.ecommerce_hub."""
+def hub_info(client, hub_names):
+    """{hub name: {"id", "lat", "lon"}} from ecommerce.ecommerce_hub (the registered hub location)."""
     from google.cloud import bigquery
     names = sorted({str(h).strip() for h in hub_names if str(h).strip()})
     if not names:
         return {}
     job = client.query(
-        f"SELECT name, id FROM `{_BQ}.ecommerce.ecommerce_hub` WHERE name IN UNNEST(@names)",
+        f"SELECT name, id, latitude, longitude FROM `{_BQ}.ecommerce.ecommerce_hub` WHERE name IN UNNEST(@names)",
         job_config=bigquery.QueryJobConfig(query_parameters=[bigquery.ArrayQueryParameter("names", "STRING", names)]))
-    return {r["name"]: int(r["id"]) for r in job.result()}
+    return {r["name"]: {"id": int(r["id"]), "lat": r["latitude"], "lon": r["longitude"]} for r in job.result()}
+
+
+def hub_ids(client, hub_names):
+    """{hub name: Hub Id} from ecommerce.ecommerce_hub."""
+    return {k: v["id"] for k, v in hub_info(client, hub_names).items()}
 
 
 def serviceability_hubs(client, pincodes):
@@ -98,8 +105,8 @@ def category_number(cat):
 
 
 def boundary_text(wkt):
-    """WKT -> ('POLYGON Z ((lon lat, ...))', problem). Coordinates rounded to 6 decimals
-    (~10 cm) as in the upload sample. Saruman takes one polygon per cluster code, so a
+    """WKT -> ('POLYGON Z ((lon lat, ...))', problem). Coordinates rounded to 7 decimals
+    (~1 cm): real upload files use 6-7, so My Maps coordinates pass through unchanged. Saruman takes one polygon per cluster code, so a
     shape made of several separate parts is an error."""
     import shapely
     from shapely import wkt as _wkt
@@ -114,14 +121,14 @@ def boundary_text(wkt):
         g = g.geoms[0]
     if not isinstance(g, Polygon) or g.is_empty or len(g.exterior.coords) < 4:
         return None, (ERROR, "Boundary needs at least 3 corners")
-    text = shapely.to_wkt(g, rounding_precision=6, trim=True)
+    text = shapely.to_wkt(g, rounding_precision=7, trim=True)
     text = "POLYGON Z " + text[text.index("("):]
     if not g.is_valid:
         return text, (CHECK, "Boundary crosses itself: check the shape in My Maps")
     return text, None
 
 
-def build_rows(polys, activate, hub_id_map, svc_map):
+def build_rows(polys, description, hub_id_map, svc_map):
     """One row per polygon with the upload values and a Status / Problem explaining any issue."""
     recs = []
     seen = polys["Cluster_Code"].astype(str).str.strip().value_counts()
@@ -163,7 +170,7 @@ def build_rows(polys, activate, hub_id_map, svc_map):
         recs.append({"Status": status, "Problem": "; ".join(p[1] for p in problems),
                      "Hub Name": hub, "Hub Id": hid, "Cluster Code": code, "Pincode": pin,
                      "Cluster Category": catn, "Served by (today)": ", ".join(served_by),
-                     "Description": DESC_ACTIVATE if activate else DESC_DEACTIVATE, "Boundary": boundary})
+                     "Description": description, "Boundary": boundary})
     return pd.DataFrame(recs)
 
 
@@ -187,3 +194,44 @@ def to_xlsx(df):
 
 def to_csv(df):
     return df.to_csv(index=False).encode("utf-8")
+
+
+# ── Preview ──────────────────────────────────────────────────────────────────
+def category_rate(catn):
+    """Cluster Category number -> rate in Rs per order (utils.DESCRIPTION_MAPPING)."""
+    from utils import DESCRIPTION_MAPPING
+    return DESCRIPTION_MAPPING.get(f"C{catn}") if catn is not None else None
+
+
+def _fmt_rate(r):
+    return "" if r is None else (f"₹{int(r)}" if float(r).is_integer() else f"₹{r:g}")
+
+
+def preview_frames(rows, info):
+    """(polygons, hubs) in the shapes the app's map and photo renderers use, for the rows
+    that will be uploaded (errors left out). Hub pins are the registered hub locations."""
+    ok = rows[rows["Status"] != ERROR].copy()
+    polys = pd.DataFrame({
+        "Pincode": ok["Pincode"], "Hub Name": ok["Hub Name"], "Cluster_Code": ok["Cluster Code"],
+        "Cluster_Category": ok["Cluster Category"].map(lambda n: f"C{int(n)}"),
+        "Description": ok["Cluster Category"].map(lambda n: _fmt_rate(category_rate(int(n)))),
+        "Polygon WKT": ok["Boundary"].str.replace("POLYGON Z", "POLYGON", n=1, regex=False),
+    }).reset_index(drop=True)
+    hubs = pd.DataFrame([{"Hub Name": h, "Hub_Name": h, "Hub_lat": v["lat"], "Hub_long": v["lon"]}
+                         for h, v in info.items() if h in set(polys["Hub Name"]) and v.get("lat") is not None],
+                        columns=["Hub Name", "Hub_Name", "Hub_lat", "Hub_long"])
+    return polys, hubs
+
+
+def hub_distance_km(polys, hubs, hub):
+    """Distance from the registered hub location to its nearest polygon (0 = inside one)."""
+    from shapely import wkt as _wkt
+    from shapely.geometry import Point
+    from shapely.ops import unary_union
+    h = hubs[hubs["Hub Name"] == hub]
+    sub = polys[polys["Hub Name"] == hub]
+    if h.empty or sub.empty:
+        return None
+    pt = Point(float(h["Hub_long"].iloc[0]), float(h["Hub_lat"].iloc[0]))
+    shape = unary_union([_wkt.loads(w) for w in sub["Polygon WKT"]])
+    return round(shape.distance(pt) * 111.0, 1)  # degrees -> km (good enough for a sanity check)

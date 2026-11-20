@@ -788,7 +788,7 @@ def _basemap_zoom(bounds_lonlat) -> int:
 
 
 def render_png(polygons: pd.DataFrame, hubs: pd.DataFrame | None = None, title: str = "",
-               basemap: bool = True, dpi: int = 150) -> bytes:
+               basemap: bool = True, dpi: int = 150, source: str = "Google My Maps") -> bytes:
     """Draw polygons (coloured by rate, labelled) + hub pins on a street basemap; return PNG bytes.
 
     The basemap (Esri, via contextily) is best-effort: without network the
@@ -852,16 +852,11 @@ def render_png(polygons: pd.DataFrame, hubs: pd.DataFrame | None = None, title: 
         ax.set_ylim(cy - hgt / 2, cy + hgt / 2)
         if basemap:
             try:
-                import contextily as ctx
-                src = ctx.providers.Esri.WorldStreetMap
+                # modules.tiles, not contextily: contextily needs rasterio, which Windows
+                # Application Control blocks on work laptops (photos lost their map).
+                from modules import tiles
                 (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
-                # bounds2img (not add_basemap) so tiles download in parallel:
-                # one-at-a-time took 15-70 s per photo, parallel ~3-5 s.
-                img, ext = ctx.bounds2img(x0, y0, x1, y1, source=src, n_connections=6, timeout=20,
-                                          zoom=_basemap_zoom(_merc_to_lonlat_bounds(x0, y0, x1, y1)))
-                ax.imshow(img, extent=ext, interpolation="bilinear", zorder=0)
-                ax.set_xlim(x0, x1); ax.set_ylim(y0, y1)
-                ctx.add_attribution(ax, src["attribution"], font_size=7)
+                tiles.add_to_axes(ax, zoom=_basemap_zoom(_merc_to_lonlat_bounds(x0, y0, x1, y1)))
             except Exception:
                 pass
         order = [b[0] for b in _RATE_BUCKETS] + [_NO_RATE[0]]
@@ -872,7 +867,7 @@ def render_png(polygons: pd.DataFrame, hubs: pd.DataFrame | None = None, title: 
         n_pins = polygons["Pincode"].replace("", pd.NA).nunique() if "Pincode" in polygons else 0
         ax.set_title(f"{title}\n{len(gdf)} polygons · {n_pins} pincodes", fontsize=14,
                      fontweight="bold", color="#0B8A7A")
-        ax.text(0.01, 0.99, f"Source: Google My Maps · {time.strftime('%d %b %Y')}", transform=ax.transAxes,
+        ax.text(0.01, 0.99, f"Source: {source} · {time.strftime('%d %b %Y')}", transform=ax.transAxes,
                 fontsize=8, color="#374151", zorder=9, va="top",
                 bbox=dict(facecolor="white", edgecolor="none", alpha=0.8))
         ax.set_axis_off()
