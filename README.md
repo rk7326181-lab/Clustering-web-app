@@ -92,6 +92,7 @@ Clustering-web-app/
 │   ├── cluster_assignor.py         # Point-in-polygon AWB assignment (STRtree)
 │   ├── bigquery_client.py          # BigQuery client + OAuth flow
 │   ├── duckdb_store.py             # Local DuckDB session cache
+│   ├── boundary_store.py           # Pincode-indexed boundary store (reads only needed pincodes)
 │   └── ui_theme.py                 # Shadowfax UI kit: CSS, header, hero, footer
 │
 ├── utils/
@@ -101,6 +102,8 @@ Clustering-web-app/
 │   ├── Clustering_Automation.csv   # Hub-pincode input
 │   ├── pincodes_ref.csv            # Pincode volumetric centroids (auto-loaded)
 │   ├── geojson_boundaries.json.gz  # All-India pincode boundaries (auto-loaded)
+│   ├── geojson_boundaries.parquet  # Same boundaries indexed by pincode (fast loads);
+│   │                               #   rebuild after replacing the .gz: python -m modules.boundary_store
 │   ├── final_output.csv            # Pre-computed P-Mapping distances
 │   └── Awb_with_cluster_info.csv   # AWB cluster assignment results
 │

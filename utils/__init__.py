@@ -384,11 +384,19 @@ def reload_from_disk():
                     pass
                 break
 
-    if st.session_state.get("geojson_data") is None:
+    if st.session_state.get("geojson_data") is None and st.session_state.get("geojson_source") != "bundled-store":
         for p in [os.path.join(OUTPUT_DIR, "geojson_boundaries.json"),
                   os.path.join(DATA_DIR, "geojson_boundaries.json"),
                   os.path.join(DATA_DIR, "geojson_boundaries.json.gz")]:
             if os.path.exists(p):
+                if p.endswith(".json.gz") and _boundary_store_meta():
+                    # Bundled All-India file: served from data/geojson_boundaries.parquet,
+                    # reading only the cluster's pincodes (_filter_geojson_to_cluster).
+                    st.session_state["geojson_source"] = "bundled-store"
+                    st.session_state["upload_status"]["geojson"] = True
+                    _set_if_none("geojson_pincode_field", _boundary_store_meta()["pincode_field"])
+                    loaded.append("geojson_boundaries (pincode store)")
+                    break
                 try:
                     data = _load_geojson(p)
                     if "features" in data:
@@ -428,7 +436,7 @@ def reload_from_disk():
             except Exception:
                 pass
 
-    if st.session_state.get("geojson_data") is None:
+    if st.session_state.get("geojson_data") is None and st.session_state.get("geojson_source") != "bundled-store":
         _geo_path = _cfg.get("geojson", "")
         if _geo_path and os.path.exists(_geo_path):
             try:
@@ -498,7 +506,8 @@ def reload_from_disk():
         except Exception:
             pass
 
-    if st.session_state.get("geojson_data") is None and os.path.exists(_HC_GEOJSON):
+    if (st.session_state.get("geojson_data") is None and os.path.exists(_HC_GEOJSON)
+            and st.session_state.get("geojson_source") != "bundled-store"):
         try:
             data = _load_geojson(_HC_GEOJSON)
             if "features" in data:
@@ -524,11 +533,52 @@ def reload_from_disk():
     return loaded
 
 
+def _boundary_store_meta():
+    try:
+        from modules.boundary_store import meta
+        return meta()
+    except Exception:
+        return None
+
+
+def _bundled_geojson_from_store():
+    """geojson_data for a session using the bundled boundaries: only the cluster's
+    pincodes, re-read whenever the cluster sheet's pincodes change. Before, the file
+    was filtered once per session, so pincodes of a cluster sheet uploaded later had
+    no boundaries. Without a cluster sheet (or if none of its pincodes match) the
+    whole file is used, as before."""
+    from modules import boundary_store as bs
+    cdf = st.session_state.get("cluster_df")
+    pins = tuple(sorted(set(cdf["Pincode"].map(bs.norm_pin)))) if cdf is not None and "Pincode" in cdf.columns else ()
+    if st.session_state.get("_geojson_store_pins") == pins and st.session_state.get("geojson_data") is not None:
+        return
+    geo = bs.features_for(pins) if pins else None
+    filtered = bool(geo and geo.get("features"))
+    if not filtered:
+        geo = _load_geojson(bs.SOURCE_PATH)  # full file, parsed once and shared
+    st.session_state["geojson_data"] = geo
+    st.session_state["_geojson_store_pins"] = pins
+    st.session_state["_geojson_filtered"] = filtered
+
+
 def _filter_geojson_to_cluster():
     """
     Shrink geojson_data in session state to only features for pincodes in cluster_df.
     Reduces memory from ~86 MB (all India) to ~3–10 MB (cluster pincodes only).
     """
+    if st.session_state.get("geojson_source") == "bundled-store":
+        if _boundary_store_meta():
+            try:
+                _bundled_geojson_from_store()
+                return
+            except Exception:
+                pass
+        st.session_state["geojson_source"] = None  # store unusable: fall back to the .gz
+        if st.session_state.get("geojson_data") is None:
+            try:
+                st.session_state["geojson_data"] = _load_geojson(os.path.join(DATA_DIR, "geojson_boundaries.json.gz"))
+            except Exception:
+                return
     geo = st.session_state.get("geojson_data")
     cdf = st.session_state.get("cluster_df")
     if geo is None or cdf is None:

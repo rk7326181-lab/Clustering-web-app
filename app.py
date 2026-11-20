@@ -838,6 +838,7 @@ if nav.startswith("1"):
                     else:
                         pf = detect_geojson_pincode_field(data); st.session_state["geojson_data"] = data; st.session_state["upload_status"]["geojson"] = True
                         st.session_state["geojson_pincode_field"] = pf
+                        st.session_state["geojson_source"] = "upload"  # user's own file: never replaced by the bundled store
                         st.session_state["_geo_new_upload"] = True
                         add_log(f"GeoJSON loaded: {len(data['features']):,} features", "success")
                         # Persist to disk for future sessions
@@ -861,6 +862,7 @@ if nav.startswith("1"):
                         data = json.load(f)
                     pf = detect_geojson_pincode_field(data); st.session_state["geojson_data"] = data; st.session_state["upload_status"]["geojson"] = True
                     st.session_state["geojson_pincode_field"] = pf
+                    st.session_state["geojson_source"] = "path"  # user's own file: never replaced by the bundled store
                     save_file_path("geojson", fp)
                     add_log(f"GeoJSON loaded from path: {len(data['features']):,} features", "success")
                     # Persist to disk
