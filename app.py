@@ -284,6 +284,7 @@ NAV_STEPS = [
     "6. AI Agent",
     "7. My Maps Polygons",
     "8. Go Live",
+    "9. Hub Explorer",
 ]
 NAV_LABELS = {
     "1. Data Ingestion": "Data Ingestion",
@@ -294,6 +295,7 @@ NAV_LABELS = {
     "6. AI Agent": "AI Agent",
     "7. My Maps Polygons": "My Maps",
     "8. Go Live": "Go Live",
+    "9. Hub Explorer": "Hub Explorer",
 }
 
 # Groq API key — loaded from secrets/env, never shown or copied by users.
@@ -511,6 +513,9 @@ _HERO = {
     "8": ("Go live", "Send polygons <em>live</em>",
           "Turns cluster polygons into the Saruman upload file. Hub Ids, boundaries and categories are "
           "filled in for you, and every row is checked before you download it."),
+    "9": ("Hub explorer", "Explore a <em>hub</em>",
+          "Look up any hub or pincode: its riders, every pincode's load, and the monthly burn under today's "
+          "P-mapping, the SOP and your own what-if, side by side."),
 }
 
 
@@ -3055,6 +3060,228 @@ elif nav.startswith("8"):
                                         f'{"; missing: " + ", ".join(_r["missing"]) if _r["missing"] else ""}'
                                         f'{"; appears more than once: " + ", ".join(_r["duplicates"]) if _r["duplicates"] else ""}.</div>',
                                         unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════
+# STEP 9 — HUB EXPLORER (standalone: works without Step 1)
+# The Apps Script "Distance Payout Dashboard" features, per hub. See modules/hub_explorer.py.
+# ═══════════════════════════════════════════════════════
+elif nav.startswith("9"):
+    from modules import hub_explorer as hx
+    from modules import boundary_store as _hbs
+    import html as _html
+
+    _bq = st.session_state.get("bq_client")
+    if _bq is None:
+        st.markdown('<div class="sfx-err">BigQuery is not connected. Hub Explorer reads serviceability, riders and '
+                    'orders from BigQuery: connect it with the status button at the top right.</div>',
+                    unsafe_allow_html=True)
+        stop_page()
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _hx_svc(_c):
+        return hx.serviceability(_c)
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _hx_hub(_c, hub):
+        return hx.hub_row(_c, hub)
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _hx_riders(_c, hid):
+        return hx.riders(_c, hid)
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _hx_load(_c, pins, window):
+        return hx.load(_c, list(pins), window)
+
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def _hx_road(lat, lon, centres):
+        return hx.road_km(lat, lon, dict(centres))
+
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def _hx_routes(lat, lon, pins):
+        return hx.road_routes(lat, lon, _hbs.features_for(pins)["features"])
+
+    with st.spinner("Loading today's serviceability..."):
+        _svc = _hx_svc(_bq)
+    _svc_date = pd.to_datetime(_svc["report_date"].max()).strftime("%d %b %Y") if len(_svc) else "—"
+
+    _fr1, _fr2 = st.columns([5, 1], vertical_alignment="center")
+    with _fr1:
+        st.markdown(
+            f'<div class="sfx-chips"><span class="sfx-chip">Current P · serviceability of {_svc_date}</span>'
+            f'<span class="sfx-chip">Load · {st.session_state.get("hx_win", "Last 30 days").lower()}</span>'
+            f'<span class="sfx-chip">Hubs, riders · live from BigQuery</span>'
+            f'<span class="sfx-chip">{_svc["hub"].nunique():,} hubs</span></div>', unsafe_allow_html=True)
+    with _fr2:
+        if st.button("↻ Refresh all", key="hx_refresh", width="stretch", help="Re-read everything from BigQuery"):
+            for _f in (_hx_svc, _hx_hub, _hx_riders, _hx_load, _hx_road, _hx_routes):
+                _f.clear()
+            st.rerun()
+
+    st.markdown('<div class="sfx-header">1 · Find a hub</div>', unsafe_allow_html=True)
+    _f1, _f2 = st.columns([2, 1])
+    with _f2:
+        _pin_q = st.text_input("…or a pincode", key="hx_pin", placeholder="560001").strip()
+    _hub_list = sorted(_svc["hub"].unique())
+    if _pin_q:
+        _m = sorted(_svc.loc[_svc["pincode"] == _pin_q, "hub"].unique())
+        if _m:
+            _hub_list = _m
+            st.caption(f"Pincode {_pin_q} is served by: {', '.join(_m)}")
+        else:
+            st.caption(f"No hub serves pincode {_pin_q} for delivery today.")
+    with _f1:
+        hub = st.selectbox("Hub", _hub_list, index=0 if _pin_q and len(_hub_list) == 1 else None,
+                           placeholder="Type a hub name, e.g. BLR_", key=f"hx_hub_{_pin_q}")
+
+    if not hub:
+        st.markdown('<div class="sfx-card">Pick a hub (or type a pincode) to see its riders, every pincode\'s load '
+                    'and the monthly burn under the current, SOP and your own P-mapping.</div>', unsafe_allow_html=True)
+    else:
+        _h = _hx_hub(_bq, hub)
+        _sub = _svc[_svc["hub"] == hub]
+        _pins = tuple(sorted(_sub["pincode"]))
+        if not _h or _h.get("latitude") is None:
+            st.markdown(f'<div class="sfx-err">{_html.escape(hub)} has no location in the Shadowfax hub list.</div>',
+                        unsafe_allow_html=True)
+            stop_page()
+        _lat, _lon = float(_h["latitude"]), float(_h["longitude"])
+        _o1, _o2 = st.columns(2)
+        with _o1:
+            _win = st.radio("Load window", list(hx.WINDOWS), horizontal=True, key="hx_win")
+        with _o2:
+            _sop_mode = st.radio("SOP distance", ["Straight line (as Step 2)", "By road (OSRM)"], horizontal=True,
+                                 key="hx_sop_mode", help="Step 2 prices the straight-line distance. 'By road' uses the "
+                                                         "driving distance from the hub to the pincode centre.")
+        with st.spinner("Reading load, riders and distances..."):
+            _ld = _hx_load(_bq, _pins, hx.WINDOWS[_win]).set_index("pincode")
+            _rd = _hx_riders(_bq, int(_h["id"]))
+            _ref = st.session_state.get("pincodes_df")
+            if _ref is None and os.path.exists(os.path.join(DATA_DIR, "pincodes_ref.csv")):
+                _ref = pd.read_csv(os.path.join(DATA_DIR, "pincodes_ref.csv"), dtype=str)
+            _cent = hx.pincode_centres(list(_pins), _ref)
+            _road = _hx_road(_lat, _lon, tuple(sorted(_cent.items()))) if _sop_mode.startswith("By road") else None
+            _sop = hx.sop_categories(_lat, _lon, _cent, _road)
+        _cur = dict(zip(_sub["pincode"], _sub["pcat"]))
+        _sopP = {p: v[1] for p, v in _sop.items()}
+        _fwd = pd.Series({p: int(_ld["fwd"].get(p, 0)) for p in _pins})
+        _rev = int(_ld["rev"].sum()) if len(_ld) else 0
+        _base = min(_sop, key=lambda p: _sop[p][0]) if _sop else "—"
+        _card = (_rd["Payout structure"].dropna().str.split("_").str[0].mode().iloc[0]
+                 if len(_rd) and _rd["Payout structure"].notna().any() else "—")
+        html_block(f'''<div class="kpi-row">
+            <div class="kpi-card"><div class="kpi-label">Pincodes</div><div class="kpi-value">{len(_pins)}</div></div>
+            <div class="kpi-card"><div class="kpi-label">Riders</div><div class="kpi-value">{len(_rd)}</div></div>
+            <div class="kpi-card"><div class="kpi-label">Hub Id</div><div class="kpi-value">{int(_h["id"])}</div></div>
+            <div class="kpi-card"><div class="kpi-label">Base pincode</div><div class="kpi-value">{_base}</div></div>
+            <div class="kpi-card"><div class="kpi-label">Rate card</div><div class="kpi-value">{_html.escape(str(_card))}</div></div>
+            <div class="kpi-card"><div class="kpi-label">Load ({_win.lower()})</div><div class="kpi-value">FWD {int(_fwd.sum()):,} · REV {_rev:,}</div></div>
+        </div>''')
+        st.caption(f"{_html.escape(str(_h.get('hub_category') or ''))} · {_h.get('hub_status') or ''} · hub location "
+                   f"{_lat:.5f}, {_lon:.5f} · {(_h.get('address') or '')[:120]}")
+
+        _ck = f"hx_custom_{hub}"
+        _custom = st.session_state.setdefault(_ck, {})
+        _tabs = st.tabs(["P-mapping", "Compare", "Map", "Riders"])
+
+        def _set_table(pmap, with_km=False):
+            t = pd.DataFrame({"Pincode": list(_pins)})
+            if with_km:
+                t["KM"] = t["Pincode"].map(lambda p: _sop.get(p, (None,))[0])
+            t["Category"] = t["Pincode"].map(pmap)
+            t["FWD load"] = t["Pincode"].map(_fwd).fillna(0).astype(int)
+            t = hx.priced(t, "Category")
+            return t
+
+        with _tabs[0]:
+            _tc, _ts = _set_table(_cur), _set_table(_sopP, with_km=True)
+            _bc, _bs_ = _tc["Burn (₹)"].sum(), _ts["Burn (₹)"].sum()
+            _custom_tbl = _set_table({p: _custom.get(p) for p in _pins})
+            _bx = _custom_tbl["Burn (₹)"].sum()
+            html_block(f'''<div class="kpi-row">
+                <div class="kpi-card"><div class="kpi-label">Current P burn</div><div class="kpi-value">₹{_bc:,.0f}</div></div>
+                <div class="kpi-card"><div class="kpi-label">SOP P burn</div><div class="kpi-value">₹{_bs_:,.0f}</div></div>
+                <div class="kpi-card"><div class="kpi-label">Custom P burn</div><div class="kpi-value">{"—" if not _custom else f"₹{_bx:,.0f}"}</div></div>
+                <div class="kpi-card {"red" if _bs_ > _bc else ""}"><div class="kpi-label">SOP vs current</div><div class="kpi-value">{"—" if not _bc else f"{(_bs_ - _bc) / _bc * 100:+.1f}%"}</div></div>
+            </div>''')
+            st.markdown('<div class="sfx-section-header">Current P · today\'s serviceability</div>', unsafe_allow_html=True)
+            st.dataframe(_tc, hide_index=True, width="stretch")
+            st.markdown(f'<div class="sfx-section-header">SOP P · 5 km buckets, '
+                        f'{"road" if _road else "straight-line"} distance</div>', unsafe_allow_html=True)
+            st.dataframe(_ts, hide_index=True, width="stretch")
+            st.markdown('<div class="sfx-section-header">Custom P · your what-if</div>', unsafe_allow_html=True)
+            _b1, _b2, _b3, _b4, _b5 = st.columns([1, 1, 1, 1, 1])
+            _ek = f"hx_ed_{hub}"
+            if _b1.button("Copy current", key="hx_cc", width="stretch"):
+                st.session_state[_ck] = dict(_cur); st.session_state.pop(_ek, None); st.rerun()
+            if _b2.button("Copy SOP", key="hx_cs", width="stretch"):
+                st.session_state[_ck] = dict(_sopP); st.session_state.pop(_ek, None); st.rerun()
+            if _b3.button("Clear", key="hx_cl", width="stretch"):
+                st.session_state[_ck] = {}; st.session_state.pop(_ek, None); st.rerun()
+            _all = _b4.selectbox("Set all to", hx.pcat_options(), key="hx_all", label_visibility="collapsed")
+            if _b5.button(f"Set all to {_all}", key="hx_sa", width="stretch"):
+                st.session_state[_ck] = {p: _all for p in _pins}; st.session_state.pop(_ek, None); st.rerun()
+            _ed = st.data_editor(
+                _custom_tbl[["Pincode", "Category", "FWD load", "₹/order", "Burn (₹)"]], key=_ek, hide_index=True,
+                width="stretch", disabled=["Pincode", "FWD load", "₹/order", "Burn (₹)"],
+                column_config={"Category": st.column_config.SelectboxColumn("Category", options=hx.pcat_options())})
+            _new_custom = {p: c for p, c in zip(_ed["Pincode"], _ed["Category"]) if isinstance(c, str) and c}
+            if _new_custom != _custom:
+                st.session_state[_ck] = _new_custom
+                st.rerun()
+            st.caption("₹/order and burn update when you change a category. Burn = ₹/order × FWD load.")
+
+        _sets = {"Current P": _cur, "SOP P": _sopP, "Custom P": dict(st.session_state.get(_ck, {}))}
+        with _tabs[1]:
+            _ca, _cb, _cc = st.columns([1, 1, 1])
+            _la = _ca.selectbox("Compare", list(_sets), index=0, key="hx_cmp_a")
+            _lb = _cb.selectbox("with", list(_sets), index=1, key="hx_cmp_b")
+            _only = _cc.toggle("Changes only", value=True, key="hx_cmp_only")
+            if _la == _lb:
+                st.caption("Pick two different P-mappings.")
+            else:
+                _cmp = hx.compare(_sets[_la], _sets[_lb], _la, _lb, _fwd)
+                _view = _cmp[_cmp[_la] != _cmp[_lb]] if _only else _cmp
+                _save = -_cmp.loc[_cmp["Δ burn (₹)"] < 0, "Δ burn (₹)"].sum()
+                _add = _cmp.loc[_cmp["Δ burn (₹)"] > 0, "Δ burn (₹)"].sum()
+                html_block(f'''<div class="kpi-row">
+                    <div class="kpi-card"><div class="kpi-label">Pincodes changed</div><div class="kpi-value">{int((_cmp[_la] != _cmp[_lb]).sum())}</div></div>
+                    <div class="kpi-card"><div class="kpi-label">{_lb} saves</div><div class="kpi-value">₹{_save:,.0f}</div></div>
+                    <div class="kpi-card red"><div class="kpi-label">{_lb} adds</div><div class="kpi-value">₹{_add:,.0f}</div></div>
+                    <div class="kpi-card {"red" if _add > _save else ""}"><div class="kpi-label">Net change</div><div class="kpi-value">₹{_add - _save:+,.0f}</div></div>
+                </div>''')
+                st.dataframe(_view, hide_index=True, width="stretch")
+                st.download_button("⬇ Comparison (CSV)", lazy_download_data(_cmp, "csv"),
+                                   f"{hub}_{_la}_vs_{_lb}.csv".replace(" ", "_"), "text/csv", key="hx_cmp_dl")
+
+        with _tabs[2]:
+            _mc1, _mc2 = st.columns([2, 1], vertical_alignment="bottom")
+            _colour = _mc1.radio("Colour pincodes by", list(_sets), horizontal=True, key="hx_map_set")
+            _want_routes = _mc2.toggle("Road routes (nearest & farthest point)", key="hx_routes")
+            _routes = None
+            if _want_routes:
+                with st.spinner("Asking OSRM for road routes..."):
+                    _routes = _hx_routes(_lat, _lon, _pins)
+            _feats = _hbs.features_for(_pins)["features"]
+            try:
+                _m = hx.hub_map(hub, _lat, _lon, _feats, _sets[_colour], _routes)
+                st.iframe(_m._repr_html_(), height=560)
+            except Exception as _e:
+                st.caption(f"Map unavailable: {_e}")
+            if _routes:
+                _rt = pd.DataFrame(_routes)
+                _rt = _rt.pivot_table(index="pincode", columns="kind", values="km").reset_index()
+                st.dataframe(_rt.rename(columns={"pincode": "Pincode", "nearest": "Nearest point (km)",
+                                                 "farthest": "Farthest point (km)"}), hide_index=True, width="stretch")
+                st.caption("Green line: road route to the nearest point of the pincode; red: to the farthest. "
+                           "Dashed = OSRM gave no road route, straight line shown.")
+
+        with _tabs[3]:
+            if len(_rd):
+                st.dataframe(_rd, hide_index=True, width="stretch")
+            else:
+                st.caption("No riders are registered at this hub.")
 
 
 # ═══════════════════════════════════════════════════════

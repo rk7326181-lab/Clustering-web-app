@@ -95,6 +95,7 @@ Clustering-web-app/
 │   ├── boundary_store.py           # Pincode-indexed boundary store (reads only needed pincodes)
 │   ├── golive.py                   # Go Live: Saruman payout-cluster upload file + row checks
 │   ├── desktop.py                  # Desktop mode robot: Saruman upload + My Maps push
+│   ├── hub_explorer.py             # Hub Explorer: per-hub riders, load, Current/SOP/Custom P burn
 │   ├── tiles.py                    # Esri street tiles for PNG photos (no rasterio)
 │   └── ui_theme.py                 # Shadowfax UI kit: CSS, header, hero, footer
 │
