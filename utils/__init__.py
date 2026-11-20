@@ -122,6 +122,23 @@ def save_file_path(key: str, path: str):
         pass
 
 
+_CLUSTER_LAST = os.path.join(OUTPUT_DIR, "cluster_last.csv")
+_CLUSTER_REQ = ["Pincode", "Hub_Name", "Hub_lat", "Hub_long"]
+
+
+def remember_cluster_df(df):
+    """Keep the last cluster sheet the user loaded (upload, manual entry or path) so the
+    next session starts with it. Before, only a typed file path was remembered, so on the
+    web app every new session had to upload the sheet again although the Step 1 hint
+    says loaded files are remembered. On Streamlit Cloud OUTPUT_DIR is /tmp/outputs:
+    the sheet is kept until the app container restarts."""
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        df.to_csv(_CLUSTER_LAST, index=False)
+    except Exception:
+        pass
+
+
 def load_file_paths_config() -> dict:
     """Return the remembered file paths dict, or {} if not saved yet."""
     try:
@@ -429,6 +446,18 @@ def reload_from_disk():
                     loaded.append("GeoJSON (remembered path)")
             except Exception:
                 pass
+
+    # Last cluster sheet loaded in any session (see remember_cluster_df)
+    if st.session_state.get("cluster_df") is None and os.path.exists(_CLUSTER_LAST):
+        try:
+            df = pd.read_csv(_CLUSTER_LAST)
+            df.columns = df.columns.str.strip()
+            if all(c in df.columns for c in _CLUSTER_REQ) and len(df):
+                st.session_state["cluster_df"] = clean_pincode(df)
+                st.session_state["upload_status"]["cluster"] = True
+                loaded.append("Cluster sheet (last used)")
+        except Exception:
+            pass
 
     if st.session_state.get("cluster_df") is None:
         _cl_path = _cfg.get("cluster_csv", "")

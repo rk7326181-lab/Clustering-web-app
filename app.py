@@ -100,7 +100,7 @@ from utils import (init_session_state, reload_from_disk, ensure_output_dirs,
                    clean_pincode, get_download_bytes, lazy_download_data, show_df_download,
                    detect_latlon_cols, detect_geojson_pincode_field,
                    haversine_km, get_pricing, get_hub_color_map,
-                   save_file_path, load_file_paths_config, _filter_geojson_to_cluster,
+                   save_file_path, load_file_paths_config, _filter_geojson_to_cluster, remember_cluster_df,
                    CLUSTER_MAP, DESCRIPTION_MAPPING, HUB_COLORS, PRICING_SLABS,
                    PCAT_SOP, RATE_TO_PCAT, rate_to_pcat, pcat_to_payout,
                    OUTPUT_DIR, HUB_IMG_DIR, DATA_DIR, _LAZY_DOWNLOADS as _LAZY_DL)
@@ -729,6 +729,7 @@ if nav.startswith("1"):
                     req = ["Pincode", "Hub_Name", "Hub_lat", "Hub_long"]
                     if all(c in df.columns for c in req):
                         df = clean_pincode(df); st.session_state["cluster_df"] = df; st.session_state["upload_status"]["cluster"] = True
+                        remember_cluster_df(df)
                         save_file_path("cluster_csv", _cl_path_inp)
                         add_log(f"Cluster CSV loaded from path: {len(df)} rows", "success")
                         st.markdown(f'<div class="sfx-ok">✅ {len(df)} rows from path</div>', unsafe_allow_html=True)
@@ -744,6 +745,7 @@ if nav.startswith("1"):
                         st.error(f"Missing: {', '.join(miss)}")
                     else:
                         df = clean_pincode(df); st.session_state["cluster_df"] = df; st.session_state["upload_status"]["cluster"] = True
+                        remember_cluster_df(df)
                         st.session_state["_geojson_filtered"] = False  # Re-filter GeoJSON with new cluster
                         _filter_geojson_to_cluster()
                         add_log(f"Cluster CSV loaded: {len(df)} rows, {df['Hub_Name'].nunique()} hubs", "success")
@@ -759,6 +761,7 @@ if nav.startswith("1"):
                 valid = valid[valid["Pincode"] != ""]
                 if len(valid) > 0:
                     valid = clean_pincode(valid); st.session_state["cluster_df"] = valid; st.session_state["upload_status"]["cluster"] = True
+                    remember_cluster_df(valid)
                     add_log(f"Manual cluster data: {len(valid)} rows", "success")
                     st.markdown(f'<div class="sfx-ok">✅ {len(valid)} rows</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
