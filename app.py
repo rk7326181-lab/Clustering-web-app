@@ -2897,7 +2897,20 @@ elif nav.startswith("8"):
                         try:
                             from modules.visualizer import create_polygon_map
                             _m = create_polygon_map(_pv_sub, _hub_row, None, False, "none", None, None, None, show_rate_labels=True)
-                            st.iframe(_m._repr_html_(), height=560) if _m is not None else st.caption("Nothing to draw.")
+                            if _m is not None:  # frame the hub's polygons + its pin (default zoom showed a wide region)
+                                from shapely import wkt as _wk
+                                from shapely.ops import unary_union as _uu
+                                _bx = list(_uu([_wk.loads(w) for w in _pv_sub["Polygon WKT"]]).bounds)
+                                if len(_hub_row):
+                                    _hy, _hx = float(_hub_row["Hub_lat"].iloc[0]), float(_hub_row["Hub_long"].iloc[0])
+                                    _bx = [min(_bx[0], _hx), min(_bx[1], _hy), max(_bx[2], _hx), max(_bx[3], _hy)]
+                                _m.fit_bounds([[_bx[1], _bx[0]], [_bx[3], _bx[2]]], padding=(30, 30))
+                            # a plain if/else, not `a if c else b`: Streamlit "magic" prints the value of a bare
+                            # expression line, which showed the returned object as code under the map
+                            if _m is not None:
+                                st.iframe(_m.get_root().render(), height=560)  # full page: map fills the frame
+                            else:
+                                st.caption("Nothing to draw.")
                         except Exception as _e:
                             st.caption(f"Map unavailable: {_e}")
                         st.caption(f"Hub location (Shadowfax hub list): {_loc}")
@@ -3266,7 +3279,7 @@ elif nav.startswith("9"):
             _feats = _hbs.features_for(_pins)["features"]
             try:
                 _m = hx.hub_map(hub, _lat, _lon, _feats, _sets[_colour], _routes)
-                st.iframe(_m._repr_html_(), height=560)
+                st.iframe(_m.get_root().render(), height=560)  # full page: map fills the frame
             except Exception as _e:
                 st.caption(f"Map unavailable: {_e}")
             if _routes:

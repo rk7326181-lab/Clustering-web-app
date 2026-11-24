@@ -268,7 +268,9 @@ def _base_map(center_lat, center_lon, zoom=9, satellite=False, draw_enabled=Fals
     )
     # Apply the India bounding box as a hard pan limit on the underlying Leaflet map
     m.options["maxBounds"] = [_INDIA_SW, _INDIA_NE]
-    # Multi-tile layers — Street / Satellite / Terrain
+    # Multi-tile layers — Street / Satellite / Terrain. Only Street is shown at first (show=False
+    # on the others): folium's default show=True put all three on the map at once, so tiles of
+    # the three base maps loaded over each other as a patchwork (and tripled tile downloads).
     # NOTE: neither OpenStreetMap's tile servers (403 "Access blocked" tiles)
     # nor CARTO Voyager (an "API KEY REQUIRED" image on every tile since Nov
     # 2026) can be used without a key: both return a valid-looking image, so
@@ -281,12 +283,12 @@ def _base_map(center_lat, center_lon, zoom=9, satellite=False, draw_enabled=Fals
     ).add_to(m)
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri", name="Satellite", overlay=False, control=True,
+        attr="Esri", name="Satellite", overlay=False, control=True, show=False,
         min_zoom=4, max_zoom=18, bounds=[_INDIA_SW, _INDIA_NE],
     ).add_to(m)
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri", name="Terrain", overlay=False, control=True,
+        attr="Esri", name="Terrain", overlay=False, control=True, show=False,
         min_zoom=4, max_zoom=18, bounds=[_INDIA_SW, _INDIA_NE],
     ).add_to(m)
     # Draw plugin (only when edit mode is on)
